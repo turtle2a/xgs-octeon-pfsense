@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pfSense CE on the Sophos XGS 2300: OCTEON TX FreeBSD driver (xgs_octep)</title>
+<meta name="description" content="Open-source FreeBSD kernel driver and install guide to run pfSense CE on the Sophos XGS 2300 with its OCTEON TX NPU: front ports as octepN interfaces, RX, TX and NAT working. GPL-2.0-or-later.">
+<meta name="keywords" content="Sophos XGS 2300, pfSense CE, OCTEON TX, Cavium, Marvell, FreeBSD driver, xgs_octep, NPU, firewall, router, open source">
+<link rel="canonical" href="https://turtle2a.github.io/xgs-octeon-pfsense/">
+<style>
+body{font-family:system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#222}
+code,pre{background:#f3f3f3;border-radius:4px}
+code{padding:.1em .3em}
+pre{padding:.8em;overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+td,th{border:1px solid #ccc;padding:.35em .6em;text-align:left}
+</style>
+</head>
+<body>
+<h1>pfSense CE on the Sophos XGS 2300</h1>
+<p>An open-source FreeBSD kernel driver, <code>xgs_octep</code>, for the OCTEON TX
+network processor (PCI <code>177d:a300</code>) in the Sophos XGS 2300. It lets
+pfSense CE use the front ports as <code>octepN</code> interfaces. The driver is
+rewritten from our own Linux OCTEP driver and is licensed GPL-2.0-or-later.</p>
+<p><a href="https://github.com/turtle2a/xgs-octeon-pfsense">Source, install guide and changelog on GitHub</a></p>
+
+<h2>Status</h2>
+<table>
+<tr><th>Item</th><th>State</th></tr>
+<tr><td>NPU handshake, port discovery, boot hold</td><td>verified</td></tr>
+<tr><td><code>octep0..11</code> interfaces, RX, TX, ping, NAT</td><td>working</td></tr>
+<tr><td>iperf, no acceleration, 0 retries</td><td>OK</td></tr>
+<tr><td>Flow offload / acceleration</td><td>not validated yet</td></tr>
+<tr><td>SFP cages and 10G ports</td><td>not tested yet</td></tr>
+</table>
+
+<h2>Quick start</h2>
+<ol>
+<li>Install pfSense CE from the <strong>serial</strong> memstick image: write it to a
+USB stick, boot the XGS from it over a serial console, and install onto the
+disk you will use permanently.</li>
+<li>Copy the project to the firewall and run, as root:
+<pre>/bin/sh ./install.sh</pre></li>
+<li>Reboot. The NPU takes 1 to 3 minutes to answer. Check:
+<pre>/sbin/sysctl dev.xgs_octep.0.status</pre></li>
+<li>Configure NAT, firewall and routing as on any pfSense install.</li>
+</ol>
+<p>Full steps, loader tunables and recovery are in the
+<a href="https://github.com/turtle2a/xgs-octeon-pfsense#readme">README</a>.</p>
+
+<h2>Not affiliated</h2>
+<p>This is an independent community project. Sophos, pfSense, Netgate, Cavium and
+Marvell are trademarks of their owners.</p>
+</body>
+</html>

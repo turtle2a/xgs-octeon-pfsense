@@ -1,13 +1,5 @@
 <?php
-/*
- * SPDX-License-Identifier: GPL-2.0-or-later
- *
- * This project is licensed under the GNU General Public License, version 2 or
- * (at your option) any later version. The complete license text is available at
- * https://www.gnu.org/licenses/old-licenses/gpl-2.0.html.
- *
- * Status: XGS NPU - what the xgs_octep driver reports about the OCTEON TX coprocessor.
- */
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 ##|+PRIV
 ##|*IDENT=page-status-xgs-npu

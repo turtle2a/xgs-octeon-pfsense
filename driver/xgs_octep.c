@@ -1,17 +1,5 @@
-/*-
- * SPDX-License-Identifier: GPL-2.0-or-later
- *
- * This project is licensed under the GNU General Public License, version 2 or
- * (at your option) any later version. The complete license text is available at
- * https://www.gnu.org/licenses/old-licenses/gpl-2.0.html.
- *
- * xgs_octep - FreeBSD bring-up driver for the OCTEON TX (CN83XX) PCIe endpoint on an XGS
- * appliance. Written from the Linux octep driver in this project's tree.
- *
- * Stage A: attach, read the NPU's barmap, discover the network agent (ports), publish status
- * through sysctl dev.xgs_octep.N.  Rings, the management handshake, the RPC ring and the offload
- * gate are later stages.
- */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* xgs_octep: FreeBSD driver for the OCTEON TX PCIe endpoint on the XGS 2300. */
 
 #include <sys/param.h>
 #ifdef XGS_KERN_VERSION

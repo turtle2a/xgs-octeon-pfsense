@@ -1,10 +1,18 @@
 # XGS OCTEON pfSense CE port
 
-FreeBSD kernel driver (`xgs_octep`) for the OCTEON TX NPU (PCI `177d:a300`) in
-the Sophos XGS 2300, so pfSense CE can use the front ports as `octepN`
-interfaces. The driver is rewritten from our own Linux OCTEP driver
-(GPL-2.0-or-later). You still configure NAT, firewall and routing yourself, as
-on any pfSense install (see TODO).
+Run **pfSense CE on the Sophos XGS 2300**. A FreeBSD kernel driver
+(`xgs_octep`) for the OCTEON TX NPU (PCI `177d:a300`) so pfSense can use the
+front ports as `octepN` interfaces. The driver is rewritten from our own Linux
+OCTEP driver (GPL-2.0-or-later). You still configure NAT, firewall and routing
+yourself, as on any pfSense install (see TODO).
+
+Project page: https://turtle2a.github.io/xgs-octeon-pfsense/
+Compatible appliances: [docs/compatible-appliances.md](docs/compatible-appliances.md)
+and the [appliance tree](docs/appliance-tree.md), plus one file per spec in
+[appliances/](appliances/)
+
+Keywords: Sophos XGS 2300, pfSense CE, OCTEON TX, Cavium, Marvell, FreeBSD
+driver, NPU, firewall, router.
 
 ## Status
 
