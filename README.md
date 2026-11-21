@@ -172,7 +172,6 @@ the interfaces are stable, then automate it with the `Shellcmd` package.
 | `boot_loader/` | loader settings used on the test box |
 | `startup_scripts/startup.sh` | per-interface option script |
 | `www/xgs_octep_status.php` | status page (not working yet) |
-| `CHANGELOG.md` | stages with test specs and results |
 
 ## TODO
 
