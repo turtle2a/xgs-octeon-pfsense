@@ -26,11 +26,48 @@ on any pfSense install (see TODO).
 - The driver is built against the pfSense FreeBSD fork headers matching the
   installed kernel, never FreeBSD `main`.
 
+## Install pfSense CE (serial image)
+
+The XGS 2300 has no video output, so install from the **serial** image.
+
+1. Download the pfSense CE amd64 **serial memstick (USB)** image and its
+   checksum from the pfSense CE download page. Verify the checksum.
+2. Write the image to a USB stick. This erases the stick. The `dd` steps are
+   for **Linux**. On Windows or macOS use an image writer (listed below).
+   - Unpack it first if it is a `.gz`: `gunzip pfSense-CE-memstick-serial-*.img.gz`
+   - Find the stick: `lsblk -o NAME,SIZE,MODEL,TRAN` (a USB stick shows
+     `usb`, for example `/dev/sdb`). Check the size matches before you go on.
+   - Unmount any mounted partitions: `umount /dev/sdb*`
+   - Write it to the whole device, not a partition (`/dev/sdb`, not
+     `/dev/sdb1`):
+     `dd if=<image>.img of=/dev/<usb-drive> bs=1M conv=fsync status=progress`
+     where `if=` is the input file (the unpacked pfSense serial image) and
+     `of=` is the output (the whole USB stick from `lsblk`, for example
+     `sdb`). Swapping them or choosing the wrong `of=` destroys data.
+   - Run `sync`, then remove the stick.
+   - A wrong `of=` can wipe your PC's disk. Never point it at the system drive.
+   - Or use an image writer. Select the unpacked `.img`, pick the USB stick,
+     and write:
+     - Linux: GNOME Disks ("Restore Disk Image"), balenaEtcher, Raspberry Pi
+       Imager ("Use custom").
+     - Windows: Rufus (choose "DD Image" mode), balenaEtcher, Win32 Disk
+       Imager, Raspberry Pi Imager ("Use custom").
+     - macOS: balenaEtcher, Raspberry Pi Imager ("Use custom"), or `dd`:
+       `diskutil unmountDisk /dev/diskN` then `dd ... of=/dev/rdiskN bs=1m`.
+3. Plug the USB stick into the XGS and connect a serial cable (for example
+   `/dev/ttyUSB0` on your PC, using PuTTY or `cu`). Power on and boot from the
+   USB stick, not the internal disk (TODO: how to pick the USB boot device on
+   the XGS).
+4. The stick only runs the installer. Run it over serial and install pfSense
+   onto the disk you will use permanently (the internal SSD, or another drive
+   of your choice). Do not install onto the USB stick.
+5. When the installer finishes, remove the USB stick and reboot. The XGS now
+   boots from the permanent disk. Then go on with the Install section below.
+
 ## Serial console
 
-The install and the Sophos boot menu are only visible over serial. Both baud
-rates have to be configured for the Sophos menu to show (TODO: confirm and
-write down the two rates).
+The Sophos boot menu is only visible over serial, and both baud rates have to
+be configured for it to show (TODO: confirm and write down the two rates).
 
 Ports on the pfSense side are `/dev/cua*`. From another host, for example
 `/dev/ttyUSB0` with PuTTY or `cu`.
