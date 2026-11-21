@@ -81,7 +81,7 @@ Ports on the pfSense side are `/dev/cua*`. From another host, for example
 `/dev/ttyUSB0` with PuTTY or `cu`.
 
 `/boot/loader.conf.local` console lines used on the test box (see
-`boot_loader/`):
+`boot_loader/loader.conf.local`):
 
     console="comconsole,efi"
     boot_multicons="YES"
@@ -169,7 +169,7 @@ the interfaces are stable, then automate it with the `Shellcmd` package.
 | `driver/prebuilt/xgs_octep.ko` | built module for the 2.9.2 kernel |
 | `driver/install.sh`, `install.sh` | module and full install |
 | `rc.d/xgs_octep` | boot hook |
-| `boot_loader/` | loader settings used on the test box |
+| `boot_loader/loader.conf.local` | loader settings used on the test box |
 | `startup_scripts/startup.sh` | per-interface option script |
 | `www/xgs_octep_status.php` | status page (not working yet) |
 
