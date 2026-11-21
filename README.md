@@ -33,6 +33,10 @@ driver, NPU, firewall, router.
 - pfSense CE 2.9.2 (FreeBSD 16.0-CURRENT), installed from the **serial image**.
 - The driver is built against the pfSense FreeBSD fork headers matching the
   installed kernel, never FreeBSD `main`.
+- **Optional, install first:** the pfSense **Shellcmd** package
+  (`pfSense-pkg-Shellcmd`, System > Package Manager > Available Packages) is
+  needed before you can run `startup_scripts/startup.sh` at boot. See
+  [Start-up commands](#start-up-commands-optional).
 
 ## Install pfSense CE (serial image)
 
@@ -155,11 +159,18 @@ ports_up=12 ifaces=12 tx=1`, with `tx_drop=0 rx_err=0`.
 unicast, broadcast and multicast frames). Use it to tell whether frames leave
 or arrive at the switch port.
 
-## Start-up commands
+## Start-up commands (optional)
 
-`startup_scripts/startup.sh` turns off the hardware options on the `octepN`,
-`ix` and `lo0` interfaces that this setup does not use. Run it by hand once
-the interfaces are stable, then automate it with the `Shellcmd` package.
+`startup_scripts/startup.sh` is optional and is not part of the tested setup.
+The installer does not install or run it, and the driver works without it. It
+is a per-interface option script (hardware offload options off on `octepN`,
+`ix`, `igc`, `igb`, `em` and `lo0`) kept as an example.
+
+To run it at boot it needs the pfSense **Shellcmd** package, which must be
+installed **first** (`pfSense-pkg-Shellcmd`, installed from System > Package Manager > Available
+Packages). Add an entry of type `shellcmd` with `/bin/sh` and the full path to
+the script. Without the package, run it by hand once the interfaces are stable.
+Automation this way is untested.
 
 ## Layout
 
@@ -170,8 +181,9 @@ the interfaces are stable, then automate it with the `Shellcmd` package.
 | `driver/install.sh`, `install.sh` | module and full install |
 | `rc.d/xgs_octep` | boot hook |
 | `boot_loader/loader.conf.local` | loader settings used on the test box |
-| `startup_scripts/startup.sh` | per-interface option script |
+| `startup_scripts/startup.sh` | optional per-interface option script (not tested) |
 | `www/xgs_octep_status.php` | status page (not working yet) |
+| `vulnerabilities/`, `issues/vulnerabilities.md` | review findings and planned checks |
 
 ## TODO
 

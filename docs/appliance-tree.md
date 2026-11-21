@@ -1,6 +1,6 @@
 # Appliance tree (from the vendor property spec files)
 
-> **Disclaimer.** Inferred from the `NPU=` field of 138 vendor spec files, not tested. Only the XGS 2300 is verified on pfSense CE. See [compatible-appliances.md](compatible-appliances.md) for the reasoning and table. Hardware with a similar name may differ in wiring, PCI IDs and firmware. Use at your own risk; not affiliated with any vendor.
+> **Disclaimer.** Inferred from the `NPU=` field of 138 vendor spec files, not tested. Only the XGS 2300 is verified. See [compatible-appliances.md](compatible-appliances.md) for the reasoning and table. Hardware with a similar name may differ in wiring, PCI IDs and firmware. Use at your own risk; not affiliated with any vendor.
 
 Each entry: `model  cores/RAM  port layout`. The model name is the spec file's `CRMODEL` value. `**` marks the tested unit.
 
@@ -31,7 +31,7 @@ OCTEON TX2 98xx  (high end) - unknown  (2 spec files)
     ├── XGS7500  64c/128GB  Port8_F14MAB_N2
     └── XGS8500  128c/256GB  Port8_F14MAB_N2
 
-Armada  (own switch, different design) - not expected to work  (20 spec files)
+Armada  (Marvell PCIe endpoint, different design) - not supported on pfSense CE, not validated  (20 spec files)
 ├── series CRING
 │   ├── XGS87  2c/4GB  Port4_F1
 │   ├── XGS107  2c/4GB  Port8_F1
