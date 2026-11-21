@@ -83,12 +83,12 @@ Ports on the pfSense side are `/dev/cua*`. From another host, for example
 `/boot/loader.conf.local` console lines used on the test box (see
 `boot_loader/loader.conf.local`):
 
-    console="comconsole,efi"
-    boot_multicons="YES"
+    console="comconsole"
+    boot_multicons="NO"
     boot_serial="YES"
 
-With `boot_multicons` the serial text is repeated (tripled). Dropping
-`boot_multicons` and setting `console="comconsole"` stops that.
+`console="comconsole,efi"` with `boot_multicons="YES"` repeats (triples) the
+serial text, so the test box uses the serial console only.
 
 ## Install
 
