@@ -1,18 +1,36 @@
-# XGS OCTEON pfSense CE port
+# OCTEP pfSense CE Driver and Install Tools
 
-Run **pfSense CE on the Sophos XGS 2300**. A FreeBSD kernel driver
-(`xgs_octep`) for the OCTEON TX NPU (PCI `177d:a300`) so pfSense can use the
-front ports as `octepN` interfaces. The driver is rewritten from our own Linux
-OCTEP driver (GPL-2.0-or-later). You still configure NAT, firewall and routing
-yourself, as on any pfSense install (see TODO).
+This project contains the FreeBSD OCTEP driver source (`xgs_octep`), a prebuilt
+module, installer, boot hook and clean-install instructions for running pfSense
+CE on the tested OCTEON TX NPU appliance. It is not a complete pfSense image or
+a general-purpose installer for every OCTEON or XGS appliance. The driver is
+rewritten from our own Linux OCTEP driver
+([xgs-octeon-linux](https://github.com/turtle2a/xgs-octeon-linux)).
+
+The primary appliance is the XGS 2300 (PCI `177d:a300`): the install is tested
+on it with pfSense CE 2.9.2 (FreeBSD 16.0-CURRENT, serial image). Other
+appliances, pfSense versions or kernels need separate testing. The driver gives
+pfSense the front ports as `octepN` interfaces. You still configure NAT,
+firewall and routing yourself, as on any pfSense install (see TODO).
 
 Project page: https://turtle2a.github.io/xgs-octeon-pfsense/
-Compatible appliances: [docs/compatible-appliances.md](docs/compatible-appliances.md)
-and the [appliance tree](docs/appliance-tree.md), plus one file per spec in
-[appliances/](appliances/)
 
-Keywords: Sophos XGS 2300, pfSense CE, OCTEON TX, Cavium, Marvell, FreeBSD
-driver, NPU, firewall, router.
+Keywords: Sophos XGS 2300, pfSense CE, OCTEON TX, OCTEP, FreeBSD NPU driver,
+Cavium, Marvell, kernel module, network appliance.
+
+## Hardware Compatibility
+
+| Appliance or family | Status | Notes |
+| --- | --- | --- |
+| XGS 2300 | Install tested | pfSense CE 2.9.2 on the serial image. SFP cages and hardware flow offload are not verified. |
+| XGS 2100, 3100, 3300 | Not yet verified | Expected to work (same NPU family) but untested with pfSense by the maintainer. |
+| Other OCTEON TX appliances | Unverified candidates | The installer expects PCI vendor/device `177d:a300`; matching that ID alone does not establish firmware, port-map or full hardware compatibility. |
+| XGS 136 | Not supported yet | Armada platform; needs a separate driver and hardware validation. |
+
+The full list of appliances is in
+[docs/compatible-appliances.md](docs/compatible-appliances.md) and the
+[appliance tree](docs/appliance-tree.md), with one file per spec in
+[appliances/](appliances/).
 
 ## Status
 
@@ -27,18 +45,106 @@ driver, NPU, firewall, router.
 | Real link state and media on `octepN` | not yet (media is fixed, status always active) |
 | Status page `xgs_octep_status.php` | not working yet (Task 10) |
 
-## Hardware and image
+## Vulnerabilities
 
-- XGS 2300 (AMD Ryzen Embedded R1606G + OCTEON TX NPU).
-- pfSense CE 2.9.2 (FreeBSD 16.0-CURRENT), installed from the **serial image**.
-- The driver is built against the pfSense FreeBSD fork headers matching the
-  installed kernel, never FreeBSD `main`.
-- **Optional, install first:** the pfSense **Shellcmd** package
-  (`pfSense-pkg-Shellcmd`, System > Package Manager > Available Packages) is
-  needed before you can run `startup_scripts/startup.sh` at boot. See
-  [Start-up commands](#start-up-commands-optional).
+Brief: the driver and install were reviewed for security. The findings are
+documented but not all fixed yet (Task 8). Everything lives in the
+[`vulnerabilities/`](vulnerabilities/) tree and
+[issues/vulnerabilities.md](issues/vulnerabilities.md).
 
-## Install pfSense CE (serial image)
+| Area | Where |
+| --- | --- |
+| Findings, mitigation options and risk register | [vulnerabilities/docs/vulnerability-mitigation.md](vulnerabilities/docs/vulnerability-mitigation.md) |
+| Planned checks and test scripts | [vulnerabilities/scripts/](vulnerabilities/scripts/) |
+| Review findings list | [issues/vulnerabilities.md](issues/vulnerabilities.md) |
+
+## Boot Loader Configuration
+
+The serial console settings and the loader tunables below go in
+`/boot/loader.conf.local` (the used file is `boot_loader/loader.conf.local`).
+
+### Serial console
+
+The Sophos boot menu is only visible over serial, and both baud rates have to
+be configured for it to show (TODO: confirm and write down the two rates).
+
+Ports on the pfSense side are `/dev/cua*`. From another host, for example
+`/dev/ttyUSB0` with PuTTY or `cu`.
+
+`/boot/loader.conf.local` console lines used on the test box (see
+`boot_loader/loader.conf.local`):
+
+    console="comconsole"
+    boot_multicons="NO"
+    boot_serial="YES"
+
+`console="comconsole,efi"` with `boot_multicons="YES"` repeats (triples) the
+serial text, so the test box uses the serial console only.
+
+### Loader tunables (`/boot/loader.conf.local`)
+
+| Tunable | Default | Set by `install.sh` | Meaning |
+|---|---|---|---|
+| `xgs_octep_load="YES"` | off | yes | load the module at boot |
+| `hw.xgs_octep.autostart` | 0 | `1` | arm rings and run the handshake as soon as the NPU is ready |
+| `hw.xgs_octep.offload` | 1 | no | firmware offload gate on at boot (keep on) |
+| `hw.xgs_octep.portup` | 1 | no | raise every NPU port |
+| `hw.xgs_octep.ifaces` | 0 | `1` | create `octepN` interfaces and receive |
+| `hw.xgs_octep.tx` | 0 | `1` | transmit from `octepN` |
+
+Boot holds until the `octepN` interfaces exist (up to 300 s), so pfSense does
+not stop at the "assign interfaces" prompt. If it still does, go on after the
+NPU is ready (1 to 3 minutes).
+
+### Recovery
+
+At the loader prompt, disable the data path and boot:
+
+    set hw.xgs_octep.ifaces="0"
+    set hw.xgs_octep.tx="0"
+    boot
+
+Once the rings are armed the module cannot be unloaded (`kldunload` fails with
+EBUSY) until the NPU is rebooted.
+
+## Installation (in order)
+
+1. Install pfSense CE from the serial image: [Install pfSense CE (serial image)](#install-pfsense-ce-serial-image).
+2. Configure the boot loader: [Boot Loader Configuration](#boot-loader-configuration).
+3. Clone the project and copy it to the firewall (below).
+4. Install the driver, reboot, then verify: [Install and Verify](#install-and-verify).
+
+Clone the project:
+
+```sh
+git clone https://github.com/turtle2a/xgs-octeon-pfsense.git
+cd xgs-octeon-pfsense
+```
+
+Then copy the folder to the firewall (SSH must be enabled under System >
+Advanced > Admin Access):
+
+```sh
+scp -r ../xgs-octeon-pfsense root@<firewall-ip>:/home/
+```
+
+Or clone on the firewall itself (needs internet access; `pkg install git` is
+untested here):
+
+```sh
+/usr/sbin/pkg install -y git
+/usr/local/bin/git clone https://github.com/turtle2a/xgs-octeon-pfsense.git /home/xgs-octeon-pfsense
+```
+
+Or without git, download the archive on the firewall (the folder becomes
+`/home/xgs-octeon-pfsense-main`):
+
+```sh
+/usr/bin/fetch -o /tmp/xo.tar.gz https://github.com/turtle2a/xgs-octeon-pfsense/archive/refs/heads/main.tar.gz
+/usr/bin/tar -xzf /tmp/xo.tar.gz -C /home
+```
+
+### Install pfSense CE (serial image)
 
 The XGS 2300 has no video output, so install from the **serial** image.
 
@@ -74,27 +180,20 @@ The XGS 2300 has no video output, so install from the **serial** image.
    onto the disk you will use permanently (the internal SSD, or another drive
    of your choice). Do not install onto the USB stick.
 5. When the installer finishes, remove the USB stick and reboot. The XGS now
-   boots from the permanent disk. Then go on with the Install section below.
+   boots from the permanent disk. Then go on with [Install and Verify](#install-and-verify).
 
-## Serial console
+### Hardware and image
 
-The Sophos boot menu is only visible over serial, and both baud rates have to
-be configured for it to show (TODO: confirm and write down the two rates).
+- XGS 2300 (AMD Ryzen Embedded R1606G + OCTEON TX NPU).
+- pfSense CE 2.9.2 (FreeBSD 16.0-CURRENT), installed from the **serial image**.
+- The driver is built against the pfSense FreeBSD fork headers matching the
+  installed kernel, never FreeBSD `main`.
+- **Optional, install first:** the pfSense **Shellcmd** package
+  (`pfSense-pkg-Shellcmd`, System > Package Manager > Available Packages) is
+  needed before you can run `startup_scripts/startup.sh` at boot. See
+  [Start-up commands](#start-up-commands-optional).
 
-Ports on the pfSense side are `/dev/cua*`. From another host, for example
-`/dev/ttyUSB0` with PuTTY or `cu`.
-
-`/boot/loader.conf.local` console lines used on the test box (see
-`boot_loader/loader.conf.local`):
-
-    console="comconsole"
-    boot_multicons="NO"
-    boot_serial="YES"
-
-`console="comconsole,efi"` with `boot_multicons="YES"` repeats (triples) the
-serial text, so the test box uses the serial console only.
-
-## Install
+## Install and Verify
 
 Run as root on the firewall, from this directory:
 
@@ -115,33 +214,7 @@ Both hashes must match. `kldload: can't load xgs_octep: module already loaded`
 is expected when updating, since the old module is still loaded. Reboot to run
 the new one. The NPU can take 1 to 3 minutes after boot to answer.
 
-## Loader tunables (`/boot/loader.conf.local`)
-
-| Tunable | Default | Set by `install.sh` | Meaning |
-|---|---|---|---|
-| `xgs_octep_load="YES"` | off | yes | load the module at boot |
-| `hw.xgs_octep.autostart` | 0 | `1` | arm rings and run the handshake as soon as the NPU is ready |
-| `hw.xgs_octep.offload` | 1 | no | firmware offload gate on at boot (keep on) |
-| `hw.xgs_octep.portup` | 1 | no | raise every NPU port |
-| `hw.xgs_octep.ifaces` | 0 | `1` | create `octepN` interfaces and receive |
-| `hw.xgs_octep.tx` | 0 | `1` | transmit from `octepN` |
-
-Boot holds until the `octepN` interfaces exist (up to 300 s), so pfSense does
-not stop at the "assign interfaces" prompt. If it still does, go on after the
-NPU is ready (1 to 3 minutes).
-
-### Recovery
-
-At the loader prompt, disable the data path and boot:
-
-    set hw.xgs_octep.ifaces="0"
-    set hw.xgs_octep.tx="0"
-    boot
-
-Once the rings are armed the module cannot be unloaded (`kldunload` fails with
-EBUSY) until the NPU is rebooted.
-
-## Interfaces
+### Verify
 
 Port tag to name: tags `33024 + 256n` (n = 0..9) are `octep0..9` (Port1..8,
 F1, F2), tag `0` is `octep10`, tag `32768` is `octep11`. `octep0` is Port1.
@@ -158,6 +231,33 @@ ports_up=12 ifaces=12 tx=1`, with `tx_drop=0 rx_err=0`.
 `links` prints, per port, the link word and the switch counters (bytes and
 unicast, broadcast and multicast frames). Use it to tell whether frames leave
 or arrive at the switch port.
+
+### NPU flow offload (on at boot)
+
+The firmware offload gate is turned on at boot by the driver (`hw.xgs_octep.offload`
+defaults to 1). Check it:
+
+    /sbin/sysctl dev.xgs_octep.0.status
+
+`offload=1 fw_cfg=0x3` means the gate is on. `/bin/sh driver/offload-check.sh`
+prints `OFFLOAD: ENABLED` or `NOT ENABLED`; with `start` and `stop` around a
+transfer it shows whether frames were hardware-forwarded. Flow offload itself is
+not validated yet (Task 6), so today all traffic still takes the host path. To
+opt out, set `hw.xgs_octep.offload="0"` in `/boot/loader.conf.local` (or
+`sysctl dev.xgs_octep.0.offload=0` at run time).
+
+## Uninstall
+
+There is no uninstall script yet (TODO). To remove the install by hand, from a
+local console as root:
+
+    /sbin/kldunload xgs_octep
+    /bin/rm /boot/modules/xgs_octep.ko /usr/local/etc/rc.d/xgs_octep /usr/local/www/xgs_octep_status.php
+
+Then delete the `xgs_octep_load` and `hw.xgs_octep.*` lines from
+`/boot/loader.conf.local` and reboot. `kldunload` fails with `EBUSY` once the
+rings are armed; in that case remove the files and the loader lines, then
+reboot to finish removal.
 
 ## Start-up commands (optional)
 
@@ -185,6 +285,33 @@ Automation this way is untested.
 | `www/xgs_octep_status.php` | status page (not working yet) |
 | `vulnerabilities/`, `issues/vulnerabilities.md` | review findings and planned checks |
 
+## Pre-Upload Test Record
+
+For a reproducible test record, save the output of the following after
+installation, and identify the pfSense version and kernel:
+
+    /usr/bin/uname -a
+    /sbin/kldstat -n xgs_octep
+    /sbin/sysctl dev.xgs_octep.0.status
+    /sbin/ifconfig -l
+    /sbin/dmesg | /usr/bin/grep xgs_octep
+
+Keep the saved record with the tested source or archive. Do not describe other
+pfSense versions, kernels, SFP cages or hardware acceleration as tested unless
+they were verified separately.
+
+## Failure Logs
+
+If bring-up fails, collect:
+
+    /sbin/dmesg > /root/dmesg.txt
+    /sbin/sysctl dev.xgs_octep.0.status
+    /sbin/sysctl dev.xgs_octep.0.links
+
+The driver messages are in `dmesg` (the message buffer persists across
+reboots). Record the pfSense version and `uname -a` with the results. The
+install is tested on the XGS 2300 with pfSense CE 2.9.2 only.
+
 ## TODO
 
 - Configure NAT, firewall and routing as on any pfSense install. The driver
@@ -197,4 +324,6 @@ Automation this way is untested.
 
 ## License
 
-GPL-2.0-or-later. See `LICENSE`.
+This project is licensed under the GNU General Public License, version 2 or
+(at your option) any later version. See [LICENSE](LICENSE). Source files use
+the SPDX identifier `GPL-2.0-or-later`.

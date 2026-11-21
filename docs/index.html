@@ -24,8 +24,10 @@ td,th{border:1px solid #ccc;padding:.35em .6em;text-align:left}
 <p>An open-source FreeBSD kernel driver, <code>xgs_octep</code>, for the OCTEON TX
 network processor (PCI <code>177d:a300</code>) in the Sophos XGS 2300. It lets
 pfSense CE use the front ports as <code>octepN</code> interfaces. The driver is
-rewritten from our own Linux OCTEP driver and is licensed GPL-2.0-or-later.</p>
-<p><a href="https://github.com/turtle2a/xgs-octeon-pfsense">Source, install guide on GitHub</a></p>
+rewritten from our own Linux OCTEP driver and is licensed under the GNU General Public License v2.0 (GPL-2.0-or-later).</p>
+<p><a href="https://github.com/turtle2a/xgs-octeon-pfsense">Source, install guide on GitHub</a>
+&middot; License: <a href="https://github.com/turtle2a/xgs-octeon-pfsense/blob/main/LICENSE">GNU General Public License v2.0</a></p>
+<pre>git clone https://github.com/turtle2a/xgs-octeon-pfsense.git</pre>
 
 <h2>Status</h2>
 <table>
@@ -57,7 +59,9 @@ vendor spec files, so treat them as untested.</p>
 <li>Install pfSense CE from the <strong>serial</strong> memstick image: write it to a
 USB stick, boot the XGS from it over a serial console, and install onto the
 disk you will use permanently.</li>
-<li>Copy the project to the firewall and run, as root:
+<li>Get the project:
+<pre>git clone https://github.com/turtle2a/xgs-octeon-pfsense.git</pre>
+Copy the folder to the firewall (for example with <code>scp</code>) and run, as root:
 <pre>/bin/sh ./install.sh</pre></li>
 <li>Reboot. The NPU takes 1 to 3 minutes to answer. Check:
 <pre>/sbin/sysctl dev.xgs_octep.0.status</pre></li>

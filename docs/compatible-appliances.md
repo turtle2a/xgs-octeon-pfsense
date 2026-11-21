@@ -1,6 +1,6 @@
 # Appliances that may be compatible
 
-> **Disclaimer.** The pfSense CE port is verified on **one** appliance only: an
+> **Disclaimer.** The pfSense CE driver is verified on **one** appliance only: an
 > XGS 2300 (OCTEON TX, PCI `177d:a300`). Everything else in this table is an
 > *inference from the vendor appliance property spec files*, not a test result.
 > Hardware with a similar name can use different switch wiring, PCI IDs and
