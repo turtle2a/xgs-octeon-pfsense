@@ -1,0 +1,26 @@
+#!/bin/sh
+#-
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# This project is licensed under the GNU General Public License, version 2 or
+# (at your option) any later version. The complete license text is available at
+# https://www.gnu.org/licenses/old-licenses/gpl-2.0.html.
+
+. /etc/rc.subr
+
+name="xgs_octep"
+rcvar="xgs_octep_enable"
+start_cmd="xgs_octep_start"
+stop_cmd=":"
+
+xgs_octep_start()
+{
+	[ -f /boot/modules/xgs_octep.ko ] || { logger -t xgs_octep "no xgs_octep.ko, nothing to do"; return 0; }
+	/sbin/kldstat -q -n xgs_octep && return 0
+	/sbin/kldload xgs_octep || logger -t xgs_octep "kldload failed; see dmesg"
+	return 0
+}
+
+load_rc_config $name
+: ${xgs_octep_enable:="YES"}
+run_rc_command "$1"
