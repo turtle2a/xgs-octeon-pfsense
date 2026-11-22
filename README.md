@@ -109,6 +109,7 @@ serial text, so the test box uses the serial console only.
 | `hw.xgs_octep.portup` | 1 | no | raise every NPU port |
 | `hw.xgs_octep.ifaces` | 0 | `1` | create `octepN` interfaces and receive |
 | `hw.xgs_octep.tx` | 0 | `1` | transmit from `octepN` |
+| `hw.amdiommu.enable` | 0 | `1` | turn on the AMD IOMMU driver so NPU DMA is translated (P1); experimental and untested with the NPU, so test with console access |
 
 Boot holds until the `octepN` interfaces exist (up to 300 s), so pfSense does
 not stop at the "assign interfaces" prompt. If it still does, go on after the
@@ -120,6 +121,7 @@ At the loader prompt, disable the data path and boot:
 
     set hw.xgs_octep.ifaces="0"
     set hw.xgs_octep.tx="0"
+    set hw.amdiommu.enable="0"
     boot
 
 Once the rings are armed the module cannot be unloaded (`kldunload` fails with
