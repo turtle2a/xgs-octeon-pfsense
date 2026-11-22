@@ -22,14 +22,14 @@ Cavium, Marvell, kernel module, network appliance.
 See section ## Installation below for full install details . See NOTE.
 
 
-*    NOTE:
+##    NOTE:
 
         The Optional setup is to install pfsense from an iso boot onto a donor computer ,
         setup the addresses ,services and boot loader as per docs ,copy over the git clone 
         folder to /home dir on the donor install.Then remove the drive and place in the 
         appliance for booting off,this would also ensure a near latest version of 
         pfsense ce is installed prior to install of xgs-octeon-pfsense.
-*
+##
 
 
 
@@ -124,14 +124,14 @@ EBUSY) until the NPU is rebooted.
 
 ## Installation (in order)
 
-*    NOTE:
+##    NOTE:
 
         The Optional setup is to install pfsense from an iso boot onto a donor computer ,
         setup the addresses ,services and boot loader as per docs ,copy over the git clone 
         folder to /home dir on the donor install.Then remove the drive and place in the 
         appliance for booting off,this would also ensure a near latest version of 
         pfsense ce is installed prior to install of xgs-octeon-pfsense.
-*
+##
 
 
 - Preparation for the admistration computer.
