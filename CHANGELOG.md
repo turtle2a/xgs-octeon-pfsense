@@ -48,12 +48,12 @@ Newest entries first.
 
 ## E4g: always settle after the RPC acknowledgement (spec, 2026-11-22, before code)
 
-Evidence (dmesg, user box): ack 91 ms (20:41 boot) and 116 ms (22/11 boot) were both followed by `rpc: command 2 timed out` / `firmware offload ON ... FAILED`, then the retry (ack 7 ms) was acknowledged. Acks of 6, 7, 43 ms had no failure; acks of 267, 302, 359, 435 ms had none after E4a2 added the 500 ms settle (only when the ack took >= 200 ms). Without that settle 414 and 474 ms acks failed. So the failure is not tied to the ack time, and a threshold cannot cover it.
+Evidence (dmesg, test box): ack 91 ms (20:41 boot) and 116 ms (22/11 boot) were both followed by `rpc: command 2 timed out` / `firmware offload ON ... FAILED`, then the retry (ack 7 ms) was acknowledged. Acks of 6, 7, 43 ms had no failure; acks of 267, 302, 359, 435 ms had none after E4a2 added the 500 ms settle (only when the ack took >= 200 ms). Without that settle 414 and 474 ms acks failed. So the failure is not tied to the ack time, and a threshold cannot cover it.
 Rate evidence: the 22/11 boot ended via the retry and iperf measured about 367 Mbit/s (boot-ON via a clean first ack gave 732 and 728). The runtime sysctl toggle also gave about 366. Hypothesis, not proven: any gate applied after a failed or repeated send leaves the slower state.
 
 Change (driver, `xo_rpc_configure`): remove the `i >= XO_RPC_SLOW_ACK_MS` condition so the 500 ms settle runs after every acknowledgement. No other change; the existing retry path stays. Cost: 500 ms at boot.
 
-Test (user, offload stays on, boot-ON): upload, hash-check, `install.sh`, reboot. After each boot run `/sbin/dmesg | /usr/bin/grep -E "offload|rpc:"` and `/bin/sh /home/xgs-octeon-pfsense-ce/driver/offload-test.sh boot` with iperf3 -B 10.4.4.2 -c 192.168.1.1 -t 30. Do 5 boots.
+Test (offload stays on, boot-ON): upload, hash-check, `install.sh`, reboot. After each boot run `/sbin/dmesg | /usr/bin/grep -E "offload|rpc:"` and `/bin/sh /home/xgs-octeon-pfsense-ce/driver/offload-test.sh boot` with iperf3 -B 10.4.4.2 -c 192.168.1.1 -t 30. Do 5 boots.
 PASS: every boot shows one `NPU acknowledged` then `firmware offload ON: fw_cfg=0x0003 acknowledged` (no `timed out`, no `FAILED`), and iperf is about 730 Mbit/s. A boot with an ack under 200 ms is the case under test; if none occurs in 5 boots the result is "not exercised".
 FAIL: a `timed out` after the settle, a boot with the gate retried, or any panic. Rollback: previous build `79ee7dde` (E4d), recovery at the loader `set hw.xgs_octep.ifaces="0"`.
 Build E4g: `0f86caa182cc2b76edb68a76d01dc40b99fc7ed719d5046e896a099939154f6b` (no warnings; E4d `79ee7dde` backed up in xgs-backups). Pins refreshed.
@@ -99,7 +99,7 @@ offload-test.sh modes (iperf is run from the client; the script prompts):
 - `cutin`: needs `hw.xgs_octep.ft="1"` and the gate on. `start`; prompt (Enter when iperf starts); wait `delay` s (default 5); `ft_add=1`; refuse to continue claiming success if `programmed` did not rise; wait `hold` s (default 25); `ft_del=1`; `stop`; `ft:` dmesg lines and `alloc`. `DEBUG=1` sets `dp_debug=1` and resets it.
 - `plain` (Task 5): records gate state and runs start/prompt/stop with no gate requirement, so a gate-off baseline can be compared with the other modes.
 
-Test (user): upload both scripts, `/bin/sh /home/xgs-octeon-pfsense-ce/driver/offload-ctl.sh status`; `offload-test.sh boot` then iperf3 -B 10.4.4.2 -c 192.168.1.1 -t 30. PASS: log written, `OFFLOAD GATE: ON`, verdict printed, rate near 730. Then `cutin` (PASS: `programmed` rises, `ft:` line logged; the ~550-frame stall is the known open item, not a script fault) and `sysctl` (PASS: dmesg shows OFF then ON acknowledged). FAIL: a script leaves `ft_add` programmed after exit, or the gate in the wrong state.
+Test: upload both scripts, `/bin/sh /home/xgs-octeon-pfsense-ce/driver/offload-ctl.sh status`; `offload-test.sh boot` then iperf3 -B 10.4.4.2 -c 192.168.1.1 -t 30. PASS: log written, `OFFLOAD GATE: ON`, verdict printed, rate near 730. Then `cutin` (PASS: `programmed` rises, `ft:` line logged; the ~550-frame stall is the known open item, not a script fault) and `sysctl` (PASS: dmesg shows OFF then ON acknowledged). FAIL: a script leaves `ft_add` programmed after exit, or the gate in the wrong state.
 
 ## Task 8, step 1: P3 and P8 in driver/install.sh (spec, code not written yet)
 
@@ -109,7 +109,7 @@ P3 (integrity): `driver/prebuilt/xgs_octep.ko.sha256` holds the pinned SHA-256 o
 
 P8 (kernel match): `driver/prebuilt/xgs_octep.kver` holds the `__FreeBSD_version` the module was built against. install.sh compares it with `/sbin/sysctl -n kern.osreldate` and refuses on a mismatch, with a message naming both values. For the source-build path it reads `__FreeBSD_version` from `${SYSDIR}/sys/param.h` and compares the same way. No override variable (the old `XGS_KERN_VERSION` is a build-only define and is not an install bypass).
 
-Test (user, on the box; hash-check the uploaded files first):
+Test (on the box; hash-check the uploaded files first):
 1. `/sbin/sysctl -n kern.osreldate` (needed to write the .kver file).
 2. Normal run: `/bin/sh driver/install.sh`. PASS: prints `pin ok` and `kernel ok`, module installs, the usual "already loaded" message.
 3. Negative P3: change one byte of the pin file copy, run again. PASS: refuses with "hash mismatch", `/boot/modules/xgs_octep.ko` unchanged (`sha256` before and after equal).
@@ -157,7 +157,7 @@ Controls (ft=1, rpc_ready, plat_known and the offload gate on, else EPERM):
   a transfer without it), multiple flows, reclaim sweeps, pf lookup, TCP state
   block, LIF_READ, FW_STATE_REV_SET. Keep iperf at 30 s.
 
-Test (user, with offload verified on at boot): set hw.xgs_octep.ft="1" in
+Test (with offload verified on at boot): set hw.xgs_octep.ft="1" in
 /boot/loader.conf.local, deploy with hash checks, reboot; offload-check.sh
 (gate ON); dp_debug=1; offload-check.sh start; start iperf3 -B 10.4.4.2 -c
 192.168.1.1 -t 30; about 5 s in run 🟩 ft_add=1; after iperf: ft_del=1;
@@ -208,9 +208,9 @@ So the hard-coded one-shot flow idea is dropped. Order is now:
 - E4d: NHOP + FLOW_CREATE_FP + MFLOW for one live pf state (default off).
 - E4e: re-arm, reclaim, many flows. Then Task 6 validation.
 
-Test spec E4c (user):
+Test spec E4c:
 1. Boot clean, `offload=1`, `ports_up=12`.
-2. Run iperf3 10.4.4.2 -> 192.168.1.1 (user), then
+2. Run iperf3 10.4.4.2 -> 192.168.1.1, then
    `/sbin/sysctl dev.xgs_octep.0.flows`.
 3. PASS: lines of `id=.. rev=.. tag=.. proto=6 src=10.4.4.2:P dst=192.168.1.1:5201
    frames=N`, an entry for the iperf data stream with large frames, metadata
@@ -331,7 +331,7 @@ stall_max_s=; new RO dev.xgs_octep.0.alloc (conn/nhop totals, programmed/
 failed/reclaimed/rearmed 0 until E4d/E4e, fw_cfg as last sent). accel output is
 unchanged (offload-check.sh parses it). Not done: flow_stats (needs CMSG conn
 stats), reply-frozen guards and npu-alloc lines (need flows, E4d/E4e).
-Test (user): deploy with hash checks, reboot, status shows offload=1 fw_cfg=0x3,
+Test: deploy with hash checks, reboot, status shows offload=1 fw_cfg=0x3,
 then 🟩 `/sbin/sysctl dev.xgs_octep.0.dp_debug=1`, run iperf3 -B 10.4.4.2 -c
 192.168.1.1 -t 30, `/sbin/dmesg | /usr/bin/tail -60`. PASS: rate lines track
 iperf, "npu counters moved" lines show RX_WIRE and TO_KN_MFLOW_NOT_ACTIVE
@@ -351,7 +351,7 @@ stall and log noise only.
 Change: record the ack time in `xo_rpc_configure`; if it is >= 200 ms, pause
 500 ms before the first command. No other behaviour change.
 
-Test spec (user, 3 reboots, offload stays on):
+Test spec (3 reboots, offload stays on):
 1. After each boot: `/sbin/dmesg | /usr/bin/grep -i xgs_octep | /usr/bin/tail -25`
    and `/sbin/sysctl dev.xgs_octep.0.status`.
 2. PASS: every boot ends `firmware offload ON: fw_cfg=0x0003 acknowledged`,
