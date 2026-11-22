@@ -410,7 +410,7 @@ id=120 rev=0 tag=33024 (octep0) 10.4.4.2:34925 > 192.168.1.1:5201 frames
 1893794 (original, pre-NAT) and id=495 rev=0 tag=33280 (octep1)
 192.168.1.1:5201 > 192.168.1.13:62717 frames 1893795 (reply, post-NAT).
 rx_pkts 3789527 ~= 2 x 1893794, rx_err 0, tx_drop 0. All rev=0. Ids for other
-tuples change over time (10.4.4.2:43636 > 34.54.185.247:443 seen as ids 372,
+tuples change over time (10.4.4.2:43636 > 203.0.113.7:443 seen as ids 372,
 239, 628), so an id must be read live right before programming. Table is
 24/24 with LRU churn from background traffic; the iperf entries persist.
 Control run planned: the writable `dev.xgs_octep.0.offload` sysctl (RW, already
