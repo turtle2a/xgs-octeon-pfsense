@@ -18,6 +18,21 @@ Project page: https://turtle2a.github.io/xgs-octeon-pfsense/
 Keywords: Sophos XGS 2300, pfSense CE, OCTEON TX, OCTEP, FreeBSD NPU driver,
 Cavium, Marvell, kernel module, network appliance.
 
+
+See section ## Installation below for full install details . See NOTE.
+
+
+*    NOTE:
+
+        The Optional setup is to install pfsense from an iso boot onto a donor computer ,
+        setup the addresses ,services and boot loader as per docs ,copy over the git clone 
+        folder to /home dir on the donor install.Then remove the drive and place in the 
+        appliance for booting off,this would also ensure a near latest version of 
+        pfsense ce is installed prior to install of xgs-octeon-pfsense.
+*
+
+
+
 ## Hardware Compatibility
 
 | Appliance or family | Status | Notes |
@@ -109,17 +124,53 @@ EBUSY) until the NPU is rebooted.
 
 ## Installation (in order)
 
-1. Install pfSense CE from the serial image: [Install pfSense CE (serial image)](#install-pfsense-ce-serial-image).
-2. Configure the boot loader: [Boot Loader Configuration](#boot-loader-configuration).
-3. Clone the project and copy it to the firewall (below).
-4. Install the driver, reboot, then verify: [Install and Verify](#install-and-verify).
+*    NOTE:
 
-Clone the project:
+        The Optional setup is to install pfsense from an iso boot onto a donor computer ,
+        setup the addresses ,services and boot loader as per docs ,copy over the git clone 
+        folder to /home dir on the donor install.Then remove the drive and place in the 
+        appliance for booting off,this would also ensure a near latest version of 
+        pfsense ce is installed prior to install of xgs-octeon-pfsense.
+*
+
+
+- Preparation for the admistration computer.
+
+- Clone the project on your administration computer:
 
 ```sh
 git clone https://github.com/turtle2a/xgs-octeon-pfsense.git
 cd xgs-octeon-pfsense
 ```
+
+- For preparation to ssh upload the /home directory on the appliance install.
+
+
+
+1. Install pfSense CE from the serial image: [Install pfSense CE (serial image)](#install-pfsense-ce-serial-image)
+   to the usb or boot drive.
+   
+2. Boot the appliance off the boot usb or drive you have imaged to ensuring you have a drive to install to that
+   is attached to the appliance or its built in nvme or ssd. ( * NOTE - DEL enters the bios , Esc during boot gives boot options).
+   
+3. Finish the install of pfsense to the appliance drive as per prompts.
+   
+4. After boot check the igb0 or mgmgt lan adapter is configured with an ip address as per the pfsense menu (See pfsense Manual).
+   dhcp on the lan will help.
+   
+5. Access the system via the web interface on the address set for igb0 or lan,this will be the only address at this point in the intall
+   prior to the install completing.Go to /boot/loader.conf.local and follow the instructions below and in the docs ,make the changes.
+   
+6. Go to the admin and access control in the web interface , enable serial (alrady done in serial image)and ssh access.
+
+7. Configure the boot loader: [Boot Loader Configuration](#boot-loader-configuration).
+    
+8. Copy the git clone from the admin pc to the pfsense firewall (below).
+    
+9. Install the driver as per docs and below, reboot, then verify: [Install and Verify](#install-and-verify).
+
+
+*NOTE if doing via console -
 
 Then copy the folder to the firewall (SSH must be enabled under System >
 Advanced > Admin Access):
