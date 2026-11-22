@@ -111,6 +111,8 @@ serial text, so the test box uses the serial console only.
 | `hw.xgs_octep.tx` | 0 | `1` | transmit from `octepN` |
 | `hw.amdiommu.enable` | 0 | no | AMD IOMMU driver (P1). Do not enable yet: with it on, the test box lost its SATA disk at boot (see CHANGELOG Task 11) |
 
+**IOMMU recommendation:** leave `hw.amdiommu.enable` unset and keep the IOMMU off in the BIOS/UEFI (names vary: IOMMU, AMD-Vi, DMA remapping). Turning it on made the test box lose its SATA disk at boot. This does not fix P1 (the NPU can still DMA anywhere in host RAM, as it already could); it only avoids that boot failure until the IOMMU is made to work with the NPU. If the box stops at `mountroot>`, power-cycle and either set `hw.amdiommu.enable="0"` at the loader prompt or switch the IOMMU off in the BIOS.
+
 Boot holds until the `octepN` interfaces exist (up to 300 s), so pfSense does
 not stop at the "assign interfaces" prompt. If it still does, go on after the
 NPU is ready (1 to 3 minutes).
