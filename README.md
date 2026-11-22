@@ -57,7 +57,7 @@ The full list of appliances is in
 | Boot, NPU handshake, port discovery | verified |
 | `octep0..11` interfaces, RX, TX, ping, NAT | working (Port1 verified by capture) |
 | Firmware offload gate on at boot (`offload=1 fw_cfg=0x3`) | on, verified |
-| iperf to 192.168.1.1, no accel, 0 retries | OK (user-run, Task 5) |
+| iperf to 192.168.1.1, no accel, 0 retries | OK (Task 5) |
 | Flow offload / acceleration | **partial**: one NAT'd flow programs and the NPU forwards about 550 frames, then stalls (the same stall as the Linux driver); work paused, default off (Task 4) |
 | SFP cages / 10G ports | not tested (Task 7) |
 | Real link state and media on `octepN` | not yet (media is fixed, status always active) |
