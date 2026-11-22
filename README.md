@@ -30,7 +30,7 @@ Cavium, Marvell, kernel module, network appliance.
         appliance for booting off,this would also ensure a near latest version of 
         pfsense ce is installed prior to install of xgs-octeon-pfsense.
 
-        See section ## Installation below for full install details . See NOTE.
+        See section ## Installation below for full install details .
         
 ##
 
