@@ -11,6 +11,7 @@
 require_once("guiconfig.inc");
 
 const XGS_LOGDIR = "/var/tmp/xgs-tests";
+const XGS_PCAPDIR = "/home/pcaps";
 const XGS_PATHFILE = "/usr/local/etc/xgs_octep.path";
 const XGS_LOADER = "/boot/loader.conf.local";
 const XGS_FRAME_BYTES = 1500;
@@ -51,9 +52,50 @@ function xgs_accel() {
 }
 
 function xgs_ifpkts($ifn) {
-	$line = xgs_run("/usr/bin/netstat -I " . escapeshellarg($ifn) . " -b -n | /usr/bin/awk 'NR==2 {print \$5, \$8}'");
+	$awk = 'NR==1 {for (i = 1; i <= NF; i++) h[$i] = i} NR==2 {print $(h["Ipkts"]), $(h["Opkts"])}';
+	$line = xgs_run("/usr/bin/netstat -I " . escapeshellarg($ifn) . " -n | /usr/bin/awk " . escapeshellarg($awk));
 	$f = preg_split('/\s+/', $line);
 	return array("in" => (int)($f[0] ?? 0), "out" => (int)($f[1] ?? 0));
+}
+
+function xgs_pcap_pids() {
+	$pids = array();
+	foreach (array("octep0", "octep1") as $i) {
+		$pid = (int)@file_get_contents("/var/run/xgs-pcap-" . $i . ".pid");
+		if ($pid > 0 && xgs_run("/bin/ps -p " . $pid . " -o comm=") === "tcpdump") {
+			$pids[$i] = $pid;
+		}
+	}
+	return $pids;
+}
+
+function xgs_pcap_start($nm, $secs = 120) {
+	if (count(xgs_pcap_pids()) > 0) {
+		return false;
+	}
+	@mkdir(XGS_PCAPDIR, 0755, true);
+	@mkdir(XGS_LOGDIR, 0755, true);
+	foreach (array("octep0", "octep1") as $i) {
+		@unlink("/var/run/xgs-pcap-" . $i . ".pid");
+		xgs_run("/usr/sbin/daemon -f -p /var/run/xgs-pcap-" . $i . ".pid -o " . XGS_LOGDIR . "/pcap-" . $i . ".log /usr/sbin/tcpdump -n -p --immediate-mode -U -s 96 -c 1000000 -G " . (int)$secs . " -W 1 -i " . $i . " -w " . escapeshellarg(XGS_PCAPDIR . "/" . $nm . "-" . $i . ".pcap") . " tcp port 5201");
+	}
+	usleep(500000);
+	$GLOBALS["xgs_pcap_fail"] = "";
+	foreach (array("octep0", "octep1") as $i) {
+		if (!isset(xgs_pcap_pids()[$i])) {
+			$GLOBALS["xgs_pcap_fail"] .= " " . $i . ": not running; " . trim((string)@file_get_contents(XGS_LOGDIR . "/pcap-" . $i . ".log"));
+		}
+	}
+	xgs_run("/bin/ls -t " . XGS_PCAPDIR . "/*.pcap 2>/dev/null | /usr/bin/tail -n +5 | /usr/bin/xargs -r /bin/rm -f");
+	return true;
+}
+
+function xgs_pcap_stop() {
+	$pids = xgs_pcap_pids();
+	foreach ($pids as $pid) {
+		xgs_run("/bin/kill " . (int)$pid);
+	}
+	return count($pids);
 }
 
 function xgs_sample() {
@@ -107,15 +149,29 @@ $msgclass = "info";
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
 	$action = $_POST["action"] ?? "";
-	$env = "";
+	@mkdir(XGS_PCAPDIR, 0755, true);
+	$env = "PCAP_DIR=" . XGS_PCAPDIR . " ";
 	$pcapname = trim($_POST["pcapname"] ?? "");
 	if ($pcapname !== "") {
 		if (preg_match('/^[A-Za-z0-9._-]{1,64}$/', $pcapname)) {
-			$env = "PCAP_DIR=/home PCAP_NAME=" . escapeshellarg($pcapname) . " ";
+			$env .= "PCAP_NAME=" . escapeshellarg($pcapname) . " ";
 		} else {
 			$msg = gettext("Rejected: pcap name may only contain letters, digits, . _ -");
 			$msgclass = "danger";
 			$action = "";
+		}
+	}
+	$autopcap = "";
+	if ($pcapname !== "" && $action !== "") {
+		if (in_array($action, array("cutin", "live_on", "iperf_client", "iperf_server"), true)) {
+			$cap = $action === "iperf_client" ? max(10, min(310, (int)($_POST["iperf_secs"] ?? 30) + 10)) : 120;
+			if (xgs_pcap_start($pcapname, $cap)) {
+				$autopcap = " " . sprintf(gettext("pcap armed: %s/%s-octepN.pcap."), XGS_PCAPDIR, $pcapname) . $xgs_pcap_fail;
+			}
+		} elseif (in_array($action, array("iperf_stop", "live_off"), true)) {
+			if (xgs_pcap_stop() > 0) {
+				$autopcap = " " . gettext("pcap stopped.");
+			}
 		}
 	}
 	if (in_array($action, array("boot", "sysctl", "cutin", "plain"), true)) {
@@ -126,6 +182,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 			xgs_run("/usr/sbin/daemon -f /usr/bin/env " . $env . "/bin/sh " . escapeshellarg($repo . "/driver/offload-test.sh") . " " . $action);
 			$msg = sprintf(gettext("Started offload-test.sh %s. Log: %s/<stamp>-%s.log"), $action, XGS_LOGDIR, $action);
 		}
+	} elseif ($action === "pcap_start") {
+		$nm = $pcapname !== "" ? $pcapname : date("Ymd-His");
+		if (xgs_pcap_start($nm)) {
+			$msg = sprintf(gettext("pcap started: %s/%s-octep0.pcap and -octep1.pcap (tcp port 5201, 96 B snaplen)."), XGS_PCAPDIR, $nm) . $xgs_pcap_fail;
+		} else {
+			$msg = gettext("A pcap is already running. Stop it first.");
+			$msgclass = "danger";
+		}
+	} elseif ($action === "pcap_stop") {
+		$msg = xgs_pcap_stop() > 0 ? gettext("pcap stopped.") : gettext("No pcap is running.");
 	} elseif ($action === "live_on" || $action === "live_off") {
 		$msg = xgs_run("/bin/sh " . escapeshellarg($repo . "/driver/offload-ctl.sh") . " " . ($action === "live_on" ? "on" : "off"));
 	} elseif ($action === "boot_on" || $action === "boot_off") {
@@ -137,6 +203,14 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 		$lines[] = 'hw.xgs_octep.offload="' . $v . '"';
 		file_put_contents(XGS_LOADER, implode("\n", $lines) . "\n");
 		$msg = sprintf(gettext("Boot setting written: hw.xgs_octep.offload=%s (applies next boot)."), $v);
+	} elseif ($action === "iperf_stop") {
+		$n = (int)xgs_run("/bin/pgrep -x iperf3 | /usr/bin/wc -l");
+		if ($n > 0) {
+			xgs_run("/bin/pkill -x iperf3");
+			$msg = sprintf(gettext("Stopped %d iperf3 process(es)."), $n);
+		} else {
+			$msg = gettext("No iperf3 is running.");
+		}
 	} elseif ($action === "iperf_server" || $action === "iperf_client") {
 		if (!is_executable("/usr/local/bin/iperf3")) {
 			$msg = gettext("iperf3 is not installed on this box (pkg install iperf3).");
@@ -242,7 +316,7 @@ include("head.inc");
 ?>
 
 <?php if ($msg !== ""): ?>
-<div class="alert alert-<?=$msgclass?>"><pre style="margin:0;background:none;border:0"><?=htmlspecialchars($msg)?></pre></div>
+<div class="alert alert-<?=$msgclass?>"><pre style="margin:0;background:none;border:0"><?=htmlspecialchars($msg . ($autopcap ?? ""))?></pre></div>
 <?php endif; ?>
 
 <div class="alert alert-<?=$gate_on ? "success" : "danger"?>" style="font-size:18px;font-weight:bold">
@@ -305,8 +379,14 @@ include("head.inc");
 	<div class="panel-heading"><h2 class="panel-title"><?=gettext("Testing")?></h2></div>
 	<div class="panel-body">
 		<div class="form-group">
-			<label><?=gettext("pcap file name (saved in /home/, cut-in only; blank = auto)")?></label>
-			<input class="form-control" type="text" name="pcapname" placeholder="cutin1" maxlength="64">
+			<label><?=gettext("pcap file name (saved in /home/pcaps/, cut-in only; blank = auto)")?></label>
+			<input class="form-control" type="text" id="pcapname" name="pcapname" placeholder="cutin1" maxlength="64" value="<?=htmlspecialchars($_POST["pcapname"] ?? "")?>">
+			<p>
+				<button class="btn btn-primary btn-sm" name="action" value="pcap_start"><?=gettext("Start pcap")?></button>
+				<button class="btn btn-danger btn-sm" name="action" value="pcap_stop"><?=gettext("Stop pcap")?></button>
+				&nbsp; <?=count(xgs_pcap_pids()) > 0 ? "<span class=\"label label-success\">pcap: RUNNING</span>" : "<span class=\"label label-default\">pcap: stopped</span>"?>
+			</p>
+			<p class="help-block" id="pcapnote"><?=gettext("The name stays until you change it. Files: /home/pcaps/NAME-octep0.pcap and NAME-octep1.pcap (newest 4 kept).")?></p>
 		</div>
 
 		<h4><?=gettext("1. Offload switches")?></h4>
@@ -331,13 +411,14 @@ include("head.inc");
 
 		<h4><?=gettext("3. iperf3")?></h4>
 		<div class="row">
-			<div class="col-sm-2"><select class="form-control" name="iperf_from"><option value="octep0">from octep0 (LAN)</option><option value="octep1">from octep1 (WAN)</option><option value="custom">custom IP</option></select></div>
-			<div class="col-sm-2"><input class="form-control" type="text" name="iperf_bind" placeholder="custom -B IP"></div>
-			<div class="col-sm-2"><input class="form-control" type="text" name="iperf_srv" value="192.168.1.1" placeholder="server IP"></div>
-			<div class="col-sm-2"><input class="form-control" type="number" name="iperf_secs" value="30" min="1" max="300"></div>
+			<div class="col-sm-2"><select class="form-control" name="iperf_from"><?php $sf = $_POST["iperf_from"] ?? "octep0"; foreach (array("octep0" => "from octep0 (LAN)", "octep1" => "from octep1 (WAN)", "custom" => "custom IP") as $k => $v) { echo "<option value=\"" . $k . "\"" . ($sf === $k ? " selected" : "") . ">" . $v . "</option>"; } ?></select></div>
+			<div class="col-sm-2"><input class="form-control" type="text" name="iperf_bind" value="<?=htmlspecialchars($_POST["iperf_bind"] ?? "")?>" placeholder="custom -B IP"></div>
+			<div class="col-sm-2"><input class="form-control" type="text" name="iperf_srv" value="<?=htmlspecialchars($_POST["iperf_srv"] ?? "192.168.1.1")?>" placeholder="server IP"></div>
+			<div class="col-sm-2"><input class="form-control" type="number" name="iperf_secs" value="<?=htmlspecialchars($_POST["iperf_secs"] ?? "30")?>" min="1" max="300"></div>
 			<div class="col-sm-4">
 				<button class="btn btn-primary btn-sm" name="action" value="iperf_client"><?=gettext("Start client")?></button>
 				<button class="btn btn-default btn-sm" name="action" value="iperf_server"><?=gettext("Local server")?></button>
+				<button class="btn btn-danger btn-sm" name="action" value="iperf_stop"><?=gettext("Stop iperf")?></button>
 			</div>
 		</div>
 		<p class="help-block"><?=gettext("Client: this box (source octep0, octep1 or custom IP) to the server, 1-300 s; box-originated traffic is not forwarded, so it is not offloaded. Local server: accepts 1 test from a LAN host, then exits. The most realistic test is iperf from a LAN client.")?></p>
@@ -386,13 +467,46 @@ include("head.inc");
 <script type="text/javascript">
 //<![CDATA[
 (function () {
+	var pn = document.getElementById("pcapname"), note = document.getElementById("pcapnote");
+	function pcapNote() {
+		note.textContent = pn.value === "" ? "Blank = auto name (date-time). Files go to /home/pcaps/ (newest 4 kept)." : "Files: /home/pcaps/" + pn.value + "-octep0.pcap and /home/pcaps/" + pn.value + "-octep1.pcap (newest 4 kept). The name stays until you change it.";
+	}
+	try {
+		if (pn.value === "") { pn.value = localStorage.getItem("xgsPcapName") || ""; }
+		pn.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); } });
+		pn.addEventListener("input", function () { localStorage.setItem("xgsPcapName", pn.value); pcapNote(); });
+	} catch (e) {}
+	pcapNote();
+	try {
+		["iperf_from", "iperf_bind", "iperf_srv", "iperf_secs"].forEach(function (n) {
+			var e = document.getElementsByName(n)[0], k = "xgs_" + n;
+			if (!e) { return; }
+			var v = localStorage.getItem(k);
+			if (v !== null && <?=isset($_POST["iperf_from"]) ? "false" : "true"?>) { e.value = v; }
+			e.addEventListener("change", function () { localStorage.setItem(k, e.value); });
+			e.addEventListener("input", function () { localStorage.setItem(k, e.value); });
+		});
+	} catch (e) {}
+})();
+(function () {
 	var FRAME = <?=XGS_FRAME_BYTES?>, KEYS = ["off", "no", "o0", "o1"], LOW = 10, BUSY = 100;
-	var base, prev, mx, mn, st;
-	function reset() {
+	var base, prev, mx, mn, st, KEY = "xgsFlow";
+	function fresh() {
 		base = null; prev = null; mx = {}; mn = {};
-		st = {seen: false, t0: null, cut: null, low: 0, n: 0, max: 0, stalled: false};
+		st = {seen: false, t0: null, cut: null, low: 0, n: 0, max: 0};
 		KEYS.forEach(function (k) { mx[k] = 0; mn[k] = null; });
 	}
+	function save() {
+		try { sessionStorage.setItem(KEY, JSON.stringify({base: base, mx: mx, mn: mn, st: st})); } catch (e) {}
+	}
+	function load() {
+		fresh();
+		try {
+			var d = JSON.parse(sessionStorage.getItem(KEY));
+			if (d && d.st && d.mx) { base = d.base; mx = d.mx; mn = d.mn; st = d.st; }
+		} catch (e) {}
+	}
+	function reset() { fresh(); save(); }
 	function vals(s) {
 		return {
 			t: s.t,
@@ -414,12 +528,14 @@ include("head.inc");
 		if (r.off >= BUSY && st.cut === null) { st.cut = ((now - st.t0) || 0).toFixed(0) + " s after first traffic"; }
 		if (st.seen && total < LOW) {
 			st.low++;
-			if (st.low === 2) { st.n++; st.stalled = true; }
-			if (st.low >= 2 && st.low > st.max) { st.max = st.low; }
 		} else if (total >= LOW) {
-			st.low = 0; st.stalled = false;
+			if (st.low >= 2 && st.low <= 10) {
+				st.n++;
+				if (st.low > st.max) { st.max = st.low; }
+			}
+			st.low = 0;
 		}
-		if (st.stalled) { label = "STALLED"; cls = "danger"; }
+		if (st.seen && st.low >= 2 && st.low <= 10) { label = "STALLED"; cls = "danger"; }
 		else if (r.off >= BUSY) { label = "OFFLOADED"; cls = "success"; }
 		else if (r.no >= BUSY || r.o0 + r.o1 >= BUSY) { label = "HOST"; cls = "warning"; }
 		else { label = "IDLE"; cls = "default"; }
@@ -434,7 +550,7 @@ include("head.inc");
 			if (s.error) { return; }
 			var v = vals(s), r = {};
 			set("f-drv", s.drv_stalls + " / " + s.drv_stall_max);
-			if (!base) { base = v; }
+			if (!base || v.off < base.off || v.no < base.no || v.o0 < base.o0 || v.o1 < base.o1) { base = v; }
 			KEYS.forEach(function (k) {
 				set("c-" + k, v[k] - base[k]);
 				if (prev) {
@@ -450,9 +566,10 @@ include("head.inc");
 			});
 			if (prev) { flow(r, v.t); }
 			prev = v;
+			save();
 		}).catch(function () {});
 	}
-	reset();
+	load();
 	document.getElementById("xgs-reset").addEventListener("click", reset);
 	tick();
 	setInterval(tick, 1000);

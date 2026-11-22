@@ -63,11 +63,13 @@ trace_start() {
 
 trace_pcap() {
 	[ "${TRACE:-1}" = 1 ] || return 0
-	st=${PCAP_NAME:-$(/bin/date +%Y%m%d-%H%M%S)}
+	st=${PCAP_NAME:+$PCAP_NAME-cutin}
+	st=${st:-$(/bin/date +%Y%m%d-%H%M%S)}
 	PD=${PCAP_DIR:-$LOGDIR}
+	/bin/mkdir -p "$PD"
 	pids=
 	for i in octep0 octep1; do
-		/usr/sbin/tcpdump -n -p -s 64 -c 20000 -i $i -w $PD/$st-$i.pcap tcp port 5201 2>$PD/$st-$i.err &
+		/usr/sbin/tcpdump -n -p -U -s 64 -c 20000 -i $i -w $PD/$st-$i.pcap tcp port 5201 2>$PD/$st-$i.err &
 		pids="$pids $!"
 	done
 	/bin/ls -t $PD/*.pcap 2>/dev/null | /usr/bin/tail -n +5 | /usr/bin/xargs -r /bin/rm -f

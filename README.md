@@ -61,7 +61,7 @@ The full list of appliances is in
 | Flow offload / acceleration | **partial**: one NAT'd flow programs and the NPU forwards about 550 frames, then stalls (the same stall as the Linux driver); work paused, default off (Task 4) |
 | SFP cages / 10G ports | not tested (Task 7) |
 | Real link state and media on `octepN` | not yet (media is fixed, status always active) |
-| Status page `xgs_octep_status.php` | not working yet (Task 10) |
+| Status page `xgs_octep_status.php` | working: banners, flow indicators, pcap, iperf (Task 10; under test) |
 
 ## Vulnerabilities
 
