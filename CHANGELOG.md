@@ -48,7 +48,7 @@ Newest entries first.
 
 ## E4g: always settle after the RPC acknowledgement (spec, 2026-11-22, before code)
 
-Evidence (dmesg, test box): ack 91 ms (20:41 boot) and 116 ms (22/11 boot) were both followed by `rpc: command 2 timed out` / `firmware offload ON ... FAILED`, then the retry (ack 7 ms) was acknowledged. Acks of 6, 7, 43 ms had no failure; acks of 267, 302, 359, 435 ms had none after E4a2 added the 500 ms settle (only when the ack took >= 200 ms). Without that settle 414 and 474 ms acks failed. So the failure is not tied to the ack time, and a threshold cannot cover it.
+Evidence (dmesg): ack 91 ms (20:41 boot) and 116 ms (22/11 boot) were both followed by `rpc: command 2 timed out` / `firmware offload ON ... FAILED`, then the retry (ack 7 ms) was acknowledged. Acks of 6, 7, 43 ms had no failure; acks of 267, 302, 359, 435 ms had none after E4a2 added the 500 ms settle (only when the ack took >= 200 ms). Without that settle 414 and 474 ms acks failed. So the failure is not tied to the ack time, and a threshold cannot cover it.
 Rate evidence: the 22/11 boot ended via the retry and iperf measured about 367 Mbit/s (boot-ON via a clean first ack gave 732 and 728). The runtime sysctl toggle also gave about 366. Hypothesis, not proven: any gate applied after a failed or repeated send leaves the slower state.
 
 Change (driver, `xo_rpc_configure`): remove the `i >= XO_RPC_SLOW_ACK_MS` condition so the 500 ms settle runs after every acknowledgement. No other change; the existing retry path stays. Cost: 500 ms at boot.
