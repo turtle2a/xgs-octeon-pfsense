@@ -63,7 +63,6 @@ if [ "${BOOT}" -eq 1 ]; then
 	grep -q '^hw.xgs_octep.autostart=' "${LC}" || echo 'hw.xgs_octep.autostart="1"' >> "${LC}"
 	grep -q '^hw.xgs_octep.ifaces=' "${LC}" || echo 'hw.xgs_octep.ifaces="1"' >> "${LC}"
 	grep -q '^hw.xgs_octep.tx=' "${LC}" || echo 'hw.xgs_octep.tx="1"' >> "${LC}"
-	grep -q '^hw.amdiommu.enable=' "${LC}" || echo 'hw.amdiommu.enable="1"' >> "${LC}"
 fi
 
 echo "loaded. The NPU can take minutes after boot to answer; check with:"

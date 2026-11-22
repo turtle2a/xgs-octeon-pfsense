@@ -2,8 +2,6 @@ xgs_octep_load="YES"
 hw.xgs_octep.autostart="1"
 hw.xgs_octep.ifaces="1"
 hw.xgs_octep.tx="1"
-# P1: AMD IOMMU driver (built into the kernel, off by default). Untested with the NPU: remove this line if boot fails.
-hw.amdiommu.enable="1"
 hw.clflush_disable="1"
 legal.intel_ipw.license_ack="1"
 legal.intel_iwi.license_ack="1"
