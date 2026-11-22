@@ -13,6 +13,7 @@
 #include <sys/bus.h>
 #include <sys/malloc.h>
 #include <sys/rman.h>
+#include <sys/priv.h>
 #include <sys/sbuf.h>
 #include <sys/sysctl.h>
 #include <sys/taskqueue.h>
@@ -23,6 +24,7 @@
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <sys/endian.h>
+#include <sys/time.h>
 
 #include <net/bpf.h>
 #include <net/if.h>
@@ -136,6 +138,16 @@ static const char *const xo_facility_names[XO_FACILITY_COUNT] = {
 #define	XO_OQ_GRANT		(XO_OQ_DESCS + XO_OQ_WMARK - XO_OQ_FETCH)
 #define	XO_RX_PREFIX		82
 #define	XO_RX_TAG_OFF		16
+#define	XO_RX_META_OFF		18
+#define	XO_RX_META_SIG		0xb44399a2U
+#define	XO_RX_META_VALID_SHIFT	8
+#define	XO_RX_FLOW_OFF		(XO_RX_META_OFF + 8)
+#define	XO_RX_FLOW_ID_MASK	0x01ffffffU
+#define	XO_RX_FLOW_REV_SHIFT	25
+#define	XO_RX_FLOW_REV_MASK	0x3fU
+#define	XO_RX_FLOW_VALID	0x80000000U
+#define	XO_FLOW_MAX		24
+#define	XO_FLOW_HDR_MAX		128
 #define	XO_RX_BUDGET		128
 #define	XO_RX_TICKS		howmany(hz, 500)
 #define	XO_PKT_MAX		65535
@@ -187,7 +199,38 @@ static const char *const xo_facility_names[XO_FACILITY_COUNT] = {
 #define	XO_RPC_DESC_OFFSET	4328
 #define	XO_RPC_CFG_WAIT_MS	3000
 #define	XO_RPC_CMD_WAIT_MS	2000
+#define	XO_RPC_SETTLE_MS	500
 #define	XO_RPC_CMD_FW_CFG_PARAMS_SET	2
+#define	XO_RPC_CMD_PLATFORM_READ	36
+#define	XO_RPC_CMD_SYS_CNT_READ	44
+#define	XO_RPC_CMD_SHIFT_MAX	4
+#define	XO_RPC_CMD_NHOP_PROGRAM	6
+#define	XO_RPC_CMD_MFLOW_PROGRAM	8
+#define	XO_RPC_CMD_FLOW_CREATE_FP	10
+#define	XO_RPC_CMD_CONN_RECLAIM_FP	16
+#define	XO_RPC_CMD_LO_CONN_READ	38
+#define	XO_RPC_CMD_LO_MFLOW_READ	40
+#define	XO_FT_CONN_BASE		10000
+#define	XO_FT_NHOP_BASE		100
+#define	XO_FT_NWA_IFACE_BASE	2
+#define	XO_FT_MIN_FRAMES	100
+#define	XO_FT_MAX_AGE_MS	4000
+#define	XO_FT_TIMEOUT_S		60
+#define	XO_FT_BRCTL		0xe
+#define	XO_FT_VERDICT		2
+#define	XO_FT_CONN_REV		1
+#define	XO_FT_ACTION_FWD	1
+#define	XO_FT_STATE_ACTIVE	2
+#define	XO_FT_NHOP_LEN		32
+#define	XO_FT_MFLOW_LEN		32
+#define	XO_FT_FLOW_LEN		180
+#define	XO_FT_FLOW_OFF_VALID	112
+#define	XO_FT_FLOW_OFF_MFLOW_O	116
+#define	XO_FT_FLOW_OFF_MFLOW_R	148
+#define	XO_FT_FLOW_OFF_NAT	84
+#define	XO_RPC_PLAT_CONN_OFF	204
+#define	XO_RPC_PLAT_NHOP_OFF	208
+#define	XO_SYS_CNT_COUNT	128
 #define	XO_FW_CFG_OFFLOAD	0x0001
 #define	XO_FW_CFG_TCP_SEQ_CHK	0x0002
 #define	XO_RPC_MAX_TRIES	60
@@ -211,6 +254,14 @@ static int xo_portup = 1;
 SYSCTL_INT(_hw_xgs_octep, OID_AUTO, portup, CTLFLAG_RDTUN, &xo_portup, 1,
     "raise every port the network agent lists once it answers (default on)");
 
+static int xo_dp_debug = 0;
+SYSCTL_INT(_hw_xgs_octep, OID_AUTO, dp_debug, CTLFLAG_RDTUN, &xo_dp_debug, 0,
+    "log drops, stalls, packet rates and moved NPU counters (default off)");
+
+static int xo_ft = 0;
+SYSCTL_INT(_hw_xgs_octep, OID_AUTO, ft, CTLFLAG_RDTUN, &xo_ft, 0,
+    "allow programming one NPU flow by hand with ft_add (default off)");
+
 struct xo_dma {
 	bus_dma_tag_t	tag;
 	bus_dmamap_t	map;
@@ -233,6 +284,25 @@ struct xo_ring {
 };
 
 struct xo_softc;
+
+struct xo_flow {
+	bool		used;
+	bool		tuple_valid;
+	uint32_t	id;
+	uint8_t		rev;
+	uint16_t	tag;
+	uint64_t	frames;
+	uint64_t	seq;
+	int		last_seen;
+	uint8_t		proto;
+	uint8_t		src[4];
+	uint8_t		dst[4];
+	uint16_t	sport;
+	uint16_t	dport;
+	uint8_t		smac[ETHER_ADDR_LEN];
+	uint8_t		dmac[ETHER_ADDR_LEN];
+	uint16_t	vlan;
+};
 
 struct xo_port {
 	struct xo_softc	*sc;
@@ -278,6 +348,13 @@ struct xo_softc {
 	uint64_t		rpc_posted;
 	uint32_t		rpc_tries;
 	uint32_t		rpc_last_rc;
+	uint16_t		rpc_last_len;
+	bool			rpc_quiet;
+	bool			plat_known;
+	uint8_t			plat_shift;
+	uint32_t		plat_conn;
+	uint32_t		plat_nhop;
+	char			plat_name[65];
 	int			rpc_err;
 	bool			want_portup;
 	bool			portup_on;
@@ -300,6 +377,12 @@ struct xo_softc {
 	uint64_t		rx_drop;
 	uint64_t		rx_cmsg;
 	uint64_t		rx_notag;
+	struct mtx		flow_lock;
+	struct xo_flow		flow[XO_FLOW_MAX];
+	uint64_t		flow_seq;
+	uint64_t		meta_frames;
+	uint64_t		meta_sig;
+	uint64_t		meta_valid;
 	bool			want_tx;
 	struct mtx		tx_lock;
 	uint32_t		tx_prod;
@@ -308,6 +391,26 @@ struct xo_softc {
 	uint64_t		tx_full;
 
 	struct timeout_task	poll;
+	struct timeout_task	mon;
+	int			dp_debug;
+	struct timeval		dbg_last;
+	int			dbg_pps;
+	bool			mon_run;
+	bool			mon_cnt_ok;
+	bool			mon_stall;
+	uint32_t		mon_zero_s;
+	uint32_t		mon_secs;
+	uint64_t		mon_hi_rate;
+	uint64_t		mon_rx, mon_tx, mon_rxdrop, mon_txdrop, mon_txfull, mon_rx10, mon_tx10;
+	uint64_t		mon_cnt[XO_SYS_CNT_COUNT];
+	uint32_t		stalls;
+	uint32_t		stall_max_s;
+	bool			ft_used;
+	uint32_t		ft_id[2];
+	uint32_t		ft_rev[2];
+	uint32_t		ft_programmed;
+	uint32_t		ft_failed;
+	uint32_t		ft_reclaimed;
 	bool			stopping;
 	bool			ready;
 	bool			nwa_done;
@@ -326,6 +429,11 @@ struct xo_softc {
 	uint32_t		*nwa_reply;
 	int			last_err;
 };
+
+#define	XO_DBG(sc, fmt, ...) do {					\
+	if ((sc)->dp_debug != 0 && ppsratecheck(&(sc)->dbg_last, &(sc)->dbg_pps, 5))	\
+		device_printf((sc)->dev, "dp-debug: " fmt "\n", ##__VA_ARGS__);	\
+} while (0)
 
 static uint32_t
 xo_rd2(struct xo_softc *sc, bus_size_t off)
@@ -1039,6 +1147,7 @@ xo_rpc_configure(struct xo_softc *sc)
 			sc->rpc_ready = true;
 			sc->fw_cfg_known = false;
 			device_printf(sc->dev, "rpc: NPU acknowledged after %u ms\n", i);
+			pause_sbt("xorpc", XO_RPC_SETTLE_MS * SBT_1MS, 0, C_HARDCLOCK);
 			return (0);
 		}
 		pause_sbt("xorpc", SBT_1MS, 0, C_HARDCLOCK);
@@ -1110,13 +1219,16 @@ xo_rpc_post(struct xo_softc *sc, uint8_t command, const uint8_t *payload, uint16
 	rc = buf[0] | ((uint16_t)buf[1] << 8);
 	reply_len = buf[6] | ((uint16_t)buf[7] << 8);
 	sc->rpc_last_rc = rc;
+	sc->rpc_last_len = reply_len;
 	if (reply_len > XO_RPC_DATA_MAX_SIZE - XO_RPC_BUF_DESC_SIZE) {
 		sc->rpc_ready = false;
 		sc->fw_cfg_known = false;
 		return (EPROTO);
 	}
 	if (rc != 0) {
-		device_printf(sc->dev, "rpc: command %u refused, return code %#x\n", command, rc);
+		if (!sc->rpc_quiet)
+			device_printf(sc->dev, "rpc: command %u refused, return code %#x\n",
+			    command, rc);
 		return (EIO);
 	}
 	return (0);
@@ -1372,6 +1484,7 @@ xo_if_transmit(if_t ifp, struct mbuf *m)
 	len = m->m_pkthdr.len;
 	if (len < ETHER_HDR_LEN || len > XO_LIF_MTU + ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN) {
 		atomic_add_64(&sc->tx_drop, 1);
+		XO_DBG(sc, "tx drop: bad length %u", len);
 		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (EMSGSIZE);
@@ -1382,6 +1495,7 @@ xo_if_transmit(if_t ifp, struct mbuf *m)
 	if (pending >= XO_IQ_DESCS - 1) {
 		sc->tx_full++;
 		mtx_unlock(&sc->tx_lock);
+		XO_DBG(sc, "tx drop: instruction queue full (pending %u)", pending);
 		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (ENOBUFS);
@@ -1576,6 +1690,116 @@ xo_rx_copy(struct xo_ring *r, uint32_t idx, uint32_t span, uint32_t frame_len, u
 	return (copied == frame_len);
 }
 
+static bool
+xo_flow_tuple(const uint8_t *f, uint32_t len, struct xo_flow *t)
+{
+	uint32_t off = ETHER_HDR_LEN, l4;
+	uint16_t et, ip_len;
+	uint8_t ihl;
+
+	if (len < ETHER_HDR_LEN)
+		return (false);
+	memcpy(t->dmac, f, ETHER_ADDR_LEN);
+	memcpy(t->smac, f + ETHER_ADDR_LEN, ETHER_ADDR_LEN);
+	et = be16dec(f + 12);
+	while (et == ETHERTYPE_VLAN || et == 0x88a8) {
+		if (len < off + ETHER_VLAN_ENCAP_LEN)
+			return (false);
+		t->vlan = be16dec(f + off) & 0x0fff;
+		et = be16dec(f + off + 2);
+		off += ETHER_VLAN_ENCAP_LEN;
+	}
+	if (et != ETHERTYPE_IP || len < off + 20 || (f[off] >> 4) != 4)
+		return (false);
+	ihl = (f[off] & 0x0f) * 4;
+	if (ihl < 20 || len < off + ihl)
+		return (false);
+	ip_len = be16dec(f + off + 2);
+	if (ip_len < ihl || (be16dec(f + off + 6) & 0x3fff) != 0)
+		return (false);
+	t->proto = f[off + 9];
+	memcpy(t->src, f + off + 12, 4);
+	memcpy(t->dst, f + off + 16, 4);
+	l4 = off + ihl;
+	if ((t->proto == 6 || t->proto == 17) && len >= l4 + 4 && ip_len >= ihl + 4) {
+		t->sport = be16dec(f + l4);
+		t->dport = be16dec(f + l4 + 2);
+	}
+	return (true);
+}
+
+static void
+xo_flow_note(struct xo_softc *sc, const uint8_t *buf, uint16_t tag, uint32_t frame_len)
+{
+	struct xo_flow t, *e = NULL, *oldest = NULL;
+	uint32_t sig, meta, ident, i, avail, rev;
+	bool flow_valid;
+
+	sig = le32dec(buf + XO_RX_META_OFF);
+	meta = le32dec(buf + XO_RX_META_OFF + 4);
+	ident = le32dec(buf + XO_RX_FLOW_OFF);
+	flow_valid = sig == XO_RX_META_SIG &&
+	    ((meta >> XO_RX_META_VALID_SHIFT) & 0xff) == 1 && (ident & XO_RX_FLOW_VALID) != 0;
+	sc->meta_frames++;
+	if (sig != XO_RX_META_SIG)
+		return;
+	sc->meta_sig++;
+	if (!flow_valid)
+		return;
+	sc->meta_valid++;
+	rev = (ident >> XO_RX_FLOW_REV_SHIFT) & XO_RX_FLOW_REV_MASK;
+	avail = MIN(MIN(frame_len, XO_FLOW_HDR_MAX), XO_BUF_SIZE - XO_RX_PREFIX);
+	memset(&t, 0, sizeof(t));
+	t.tuple_valid = xo_flow_tuple(buf + XO_RX_PREFIX, avail, &t);
+	if (!t.tuple_valid)
+		memset(&t, 0, sizeof(t));
+
+	mtx_lock(&sc->flow_lock);
+	for (i = 0; i < XO_FLOW_MAX; i++) {
+		struct xo_flow *c = &sc->flow[i];
+
+		if (c->used && c->id == (ident & XO_RX_FLOW_ID_MASK) && c->rev == rev &&
+		    c->tag == tag) {
+			e = c;
+			break;
+		}
+		if (!c->used) {
+			e = c;
+			break;
+		}
+		if (oldest == NULL || c->seq < oldest->seq)
+			oldest = c;
+	}
+	if (e == NULL)
+		e = oldest;
+	if (!e->used || e->id != (ident & XO_RX_FLOW_ID_MASK) || e->rev != rev || e->tag != tag) {
+		memset(e, 0, sizeof(*e));
+		e->used = true;
+		e->id = ident & XO_RX_FLOW_ID_MASK;
+		e->rev = rev;
+		e->tag = tag;
+	}
+	if (e->tuple_valid != t.tuple_valid || e->proto != t.proto || e->sport != t.sport ||
+	    e->dport != t.dport || e->vlan != t.vlan || memcmp(e->src, t.src, 4) != 0 ||
+	    memcmp(e->dst, t.dst, 4) != 0 || memcmp(e->smac, t.smac, ETHER_ADDR_LEN) != 0 ||
+	    memcmp(e->dmac, t.dmac, ETHER_ADDR_LEN) != 0) {
+		e->tuple_valid = t.tuple_valid;
+		e->proto = t.proto;
+		memcpy(e->src, t.src, 4);
+		memcpy(e->dst, t.dst, 4);
+		e->sport = t.sport;
+		e->dport = t.dport;
+		memcpy(e->smac, t.smac, ETHER_ADDR_LEN);
+		memcpy(e->dmac, t.dmac, ETHER_ADDR_LEN);
+		e->vlan = t.vlan;
+		e->frames = 0;
+	}
+	e->frames++;
+	e->seq = ++sc->flow_seq;
+	e->last_seen = ticks;
+	mtx_unlock(&sc->flow_lock);
+}
+
 static void
 xo_rx_ring(struct xo_softc *sc, struct xo_ring *r)
 {
@@ -1612,21 +1836,27 @@ xo_rx_ring(struct xo_softc *sc, struct xo_ring *r)
 		tag = be16dec(buf + XO_RX_TAG_OFF);
 		p = xo_port_by_tag(sc, tag);
 
+		if (tag != XO_CMSG_TAG)
+			xo_flow_note(sc, buf, tag, frame_len);
 		if (tag == XO_CMSG_TAG) {
 			sc->rx_cmsg++;
 		} else if (p == NULL) {
 			sc->rx_notag++;
+			XO_DBG(sc, "rx drop: unknown tag 0x%04x len %u", tag, frame_len);
 		} else if (frame_len < ETHER_HDR_LEN || frame_len >
 		    (uint32_t)if_getmtu(p->ifp) + ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN) {
 			if_inc_counter(p->ifp, IFCOUNTER_IERRORS, 1);
 			sc->rx_drop++;
+			XO_DBG(sc, "rx drop: bad length %u tag 0x%04x", frame_len, tag);
 		} else if ((m = m_get2(frame_len, M_NOWAIT, MT_DATA, M_PKTHDR)) == NULL) {
 			if_inc_counter(p->ifp, IFCOUNTER_IQDROPS, 1);
 			sc->rx_drop++;
+			XO_DBG(sc, "rx drop: mbuf alloc failed (len %u tag 0x%04x)", frame_len, tag);
 		} else if (!xo_rx_copy(r, idx, span, frame_len, mtod(m, uint8_t *))) {
 			m_freem(m);
 			if_inc_counter(p->ifp, IFCOUNTER_IERRORS, 1);
 			sc->rx_drop++;
+			XO_DBG(sc, "rx drop: ring copy failed (len %u tag 0x%04x)", frame_len, tag);
 		} else {
 			m->m_len = m->m_pkthdr.len = frame_len;
 			m->m_pkthdr.rcvif = p->ifp;
@@ -1678,7 +1908,8 @@ xo_if_poll(struct xo_softc *sc)
 	int err;
 
 	if (!sc->ifaces_done && sc->want_ifaces && sc->nwa_done && sc->rpc_ready &&
-	    sc->portup_on && sc->offload_on && sc->if_tries < XO_IF_MAX_TRIES) {
+	    sc->portup_on && sc->offload_on == sc->want_offload &&
+	    sc->if_tries < XO_IF_MAX_TRIES) {
 		sc->if_tries++;
 		CURVNET_SET_QUIET(vnet0);
 		err = xo_ifaces_create(sc);
@@ -1816,7 +2047,7 @@ xo_sysctl_status(SYSCTL_HANDLER_ARGS)
 	int error;
 
 	sbuf_new_for_sysctl(&sb, NULL, 256, req);
-	sbuf_printf(&sb, "ready=%d barmap_version=%#x nwa=%d ports=%u marker=%#x last_err=%d dp=%d hs=%d ticks_per_us=%u rpc_ready=%d offload=%d fw_cfg=%#x rpc_err=%d rpc_rc=%#x ports_up=%u portup_fail=%u portup_tries=%u ifaces=%u rx_pkts=%ju rx_err=%ju rx_cmsg=%ju rx_notag=%ju tx=%d tx_pkts=%ju tx_drop=%ju tx_full=%ju iq_ctl=%#jx iq_en=%#jx iq_dbell=%#jx tx_prod=%u",
+	sbuf_printf(&sb, "ready=%d barmap_version=%#x nwa=%d ports=%u marker=%#x last_err=%d dp=%d hs=%d ticks_per_us=%u rpc_ready=%d offload=%d fw_cfg=%#x rpc_err=%d rpc_rc=%#x ports_up=%u portup_fail=%u portup_tries=%u ifaces=%u rx_pkts=%ju rx_err=%ju rx_cmsg=%ju rx_notag=%ju tx=%d tx_pkts=%ju tx_drop=%ju tx_full=%ju iq_ctl=%#jx iq_en=%#jx iq_dbell=%#jx tx_prod=%u dp_debug=%d stalls=%u stall_max_s=%u",
 	    sc->ready, sc->barmap_ver, sc->nwa_done, sc->nwa_nports, sc->nwa_marker,
 	    sc->last_err, sc->dp_up, sc->hs_done, sc->ticks_per_us, sc->rpc_ready,
 	    sc->offload_on, sc->fw_cfg, sc->rpc_err, sc->rpc_last_rc,
@@ -1827,7 +2058,7 @@ xo_sysctl_status(SYSCTL_HANDLER_ARGS)
 	    (uintmax_t)(sc->dp_up ? xo_ring_rd(sc, sc->ring[0].ring, XO_R_IN_CONTROL) : 0),
 	    (uintmax_t)(sc->dp_up ? xo_ring_rd(sc, sc->ring[0].ring, XO_R_IN_ENABLE) : 0),
 	    (uintmax_t)(sc->dp_up ? xo_ring_rd(sc, sc->ring[0].ring, XO_R_IN_INSTR_DBELL) : 0),
-	    sc->tx_prod);
+	    sc->tx_prod, sc->dp_debug, sc->stalls, sc->stall_max_s);
 	for (i = 0; i < XO_FACILITY_COUNT; i++)
 		sbuf_printf(&sb, " %s=%#x+%#x", xo_facility_names[i], sc->fac[i].offset,
 		    sc->fac[i].size);
@@ -1873,6 +2104,694 @@ xo_sysctl_links(SYSCTL_HANDLER_ARGS)
 			    (uintmax_t)(st[52] | (uint64_t)st[53] << 32),
 			    (uintmax_t)(st[24] | (uint64_t)st[25] << 32));
 	}
+	error = sbuf_finish(&sb);
+	sbuf_delete(&sb);
+	return (error);
+}
+
+static int
+xo_accel_platform(struct xo_softc *sc)
+{
+	const uint8_t *reply;
+	uint32_t shift;
+
+	sx_assert(&sc->lock, SA_XLOCKED);
+	reply = (const uint8_t *)sc->rpc_cmd.vaddr + XO_RPC_BUF_DESC_SIZE;
+	if (sc->plat_known)
+		return (0);
+	sc->rpc_quiet = true;
+	for (shift = 0; shift <= XO_RPC_CMD_SHIFT_MAX; shift++) {
+		if (xo_rpc_post(sc, XO_RPC_CMD_PLATFORM_READ + shift, NULL, 0) != 0)
+			continue;
+		if ((sc->rpc_last_len != 228 && sc->rpc_last_len != 232) ||
+		    memcmp(reply, "XGS_", 4) != 0)
+			continue;
+		sc->plat_conn = le32dec(reply + XO_RPC_PLAT_CONN_OFF);
+		sc->plat_nhop = le32dec(reply + XO_RPC_PLAT_NHOP_OFF);
+		if (sc->plat_conn == 0 || sc->plat_nhop == 0)
+			continue;
+		memset(sc->plat_name, 0, sizeof(sc->plat_name));
+		strlcpy(sc->plat_name, (const char *)reply, sizeof(sc->plat_name));
+		sc->plat_shift = shift;
+		sc->plat_known = true;
+		break;
+	}
+	sc->rpc_quiet = false;
+	return (sc->plat_known ? 0 : ENOENT);
+}
+
+static int
+xo_sysctl_accel(SYSCTL_HANDLER_ARGS)
+{
+	struct xo_softc *sc = arg1;
+	const uint8_t *reply;
+	uint8_t payload[12];
+	struct sbuf sb;
+	uint64_t v;
+	uint32_t i, nz;
+	int error, err;
+
+	error = priv_check(req->td, PRIV_DRIVER);
+	if (error != 0)
+		return (error);
+	sbuf_new_for_sysctl(&sb, NULL, 2048, req);
+	sx_xlock(&sc->lock);
+	if (!sc->rpc_ready) {
+		sx_xunlock(&sc->lock);
+		sbuf_printf(&sb, "accel: rpc not ready");
+		error = sbuf_finish(&sb);
+		sbuf_delete(&sb);
+		return (error);
+	}
+	reply = (const uint8_t *)sc->rpc_cmd.vaddr + XO_RPC_BUF_DESC_SIZE;
+	err = xo_accel_platform(sc);
+	if (err != 0) {
+		sx_xunlock(&sc->lock);
+		sbuf_printf(&sb, "accel: platform read failed err=%d rpc_ready=%d", err, sc->rpc_ready);
+		error = sbuf_finish(&sb);
+		sbuf_delete(&sb);
+		return (error);
+	}
+	sbuf_printf(&sb, "platform=%s shift=%u conn=%u nhop=%u\n", sc->plat_name, sc->plat_shift,
+	    sc->plat_conn, sc->plat_nhop);
+	memset(payload, 0, sizeof(payload));
+	le16enc(payload + 4, XO_SYS_CNT_COUNT);
+	le32enc(payload + 8, XO_SYS_CNT_COUNT - 1);
+	err = xo_rpc_post(sc, XO_RPC_CMD_SYS_CNT_READ + sc->plat_shift, payload, sizeof(payload));
+	if (err != 0 || sc->rpc_last_len != XO_SYS_CNT_COUNT * sizeof(uint64_t)) {
+		sbuf_printf(&sb, "counters: read failed err=%d len=%u rpc_ready=%d\n", err,
+		    sc->rpc_last_len, sc->rpc_ready);
+	} else {
+		nz = 0;
+		for (i = 0; i < XO_SYS_CNT_COUNT; i++) {
+			v = le64dec(reply + i * sizeof(uint64_t));
+			if (v != 0) {
+				sbuf_printf(&sb, "%u=%ju\n", i, (uintmax_t)v);
+				nz++;
+			}
+		}
+		sbuf_printf(&sb, "nonzero=%u of %u\n", nz, XO_SYS_CNT_COUNT);
+	}
+	sx_xunlock(&sc->lock);
+	error = sbuf_finish(&sb);
+	sbuf_delete(&sb);
+	return (error);
+}
+
+static const struct { uint8_t id; const char *name; } xo_cnt_names[] = {
+	{ 0, "RX_WIRE" }, { 1, "TX_WIRE" }, { 2, "WIRE_TO_WIRE" }, { 3, "RX_KN" },
+	{ 8, "TX_DROP" }, { 9, "TX_DROP_QUEUE_FULL" }, { 10, "TX_DROP_LEN_ERR" },
+	{ 11, "TX_DROP_SHAPER_INV" }, { 21, "TX_DROP_POLL" }, { 22, "TX_DROP_ERR" },
+	{ 24, "DROP_LIF_INDEX_INVALID" }, { 25, "DROP_LIF_LU_NULL" },
+	{ 26, "DROP_LIF_INVALID" }, { 27, "DROP_LIF_ADMIN_DISABLED" },
+	{ 28, "DROP_LIF_NOT_MY_MAC" }, { 29, "DROP_MTU_EXCEEDED" },
+	{ 30, "DROP_TCP_SEQ_CHK_INVALID" }, { 31, "DROP_IPS_VERDICT" },
+	{ 33, "DROP_MFLOW_ACTION" }, { 34, "DROP_MFLOW_UNSUPPORTED_ACTION" },
+	{ 35, "DROP_FRAG_ERROR" }, { 36, "DROP_IG_ERR" },
+	{ 40, "TO_KN_NON_ACCEL" }, { 42, "TO_KN_FW_REV_MISMATCH" },
+	{ 43, "TO_KN_L3_FW_REV_MISMATCH" }, { 52, "TO_KN_CONN_RECLAIM_PENDING" },
+	{ 53, "TO_KN_CONN_RECLAIMED" }, { 56, "TO_KN_TCP_SEQ_CHK_INVALID" },
+	{ 57, "TO_KN_TCP_MAX_RETRANS" }, { 58, "TO_KN_TCP_FIN_SYN_RST" },
+	{ 59, "TO_KN_MFLOW_NOT_ACTIVE" }, { 60, "TO_KN_EG_ERR" },
+};
+
+static void
+xo_mon_counters(struct xo_softc *sc)
+{
+	const uint8_t *reply;
+	uint8_t payload[12];
+	char line[400];
+	uint64_t now, delta;
+	size_t n = 0;
+	uint32_t i, k;
+
+	sx_xlock(&sc->lock);
+	if (!sc->rpc_ready || xo_accel_platform(sc) != 0) {
+		sx_xunlock(&sc->lock);
+		return;
+	}
+	reply = (const uint8_t *)sc->rpc_cmd.vaddr + XO_RPC_BUF_DESC_SIZE;
+	memset(payload, 0, sizeof(payload));
+	le16enc(payload + 4, XO_SYS_CNT_COUNT);
+	le32enc(payload + 8, XO_SYS_CNT_COUNT - 1);
+	sc->rpc_quiet = true;
+	if (xo_rpc_post(sc, XO_RPC_CMD_SYS_CNT_READ + sc->plat_shift, payload, sizeof(payload)) != 0 ||
+	    sc->rpc_last_len != XO_SYS_CNT_COUNT * sizeof(uint64_t)) {
+		sc->rpc_quiet = false;
+		sx_xunlock(&sc->lock);
+		return;
+	}
+	sc->rpc_quiet = false;
+	line[0] = '\0';
+	for (i = 0; i < XO_SYS_CNT_COUNT; i++) {
+		const char *name = NULL;
+
+		now = le64dec(reply + i * sizeof(uint64_t));
+		delta = now - sc->mon_cnt[i];
+		sc->mon_cnt[i] = now;
+		if (!sc->mon_cnt_ok || delta == 0)
+			continue;
+		for (k = 0; k < nitems(xo_cnt_names); k++)
+			if (xo_cnt_names[k].id == i)
+				name = xo_cnt_names[k].name;
+		if (n < sizeof(line))
+			n += snprintf(line + n, sizeof(line) - n, " %s[%u]+%ju",
+			    name != NULL ? name : "ctr", i, (uintmax_t)delta);
+	}
+	sc->mon_cnt_ok = true;
+	sx_xunlock(&sc->lock);
+	if (n != 0)
+		device_printf(sc->dev, "dp-debug: npu counters moved:%s\n", line);
+}
+
+static void
+xo_mon_task(void *arg, int pending __unused)
+{
+	struct xo_softc *sc = arg;
+	uint64_t rx, tx, rxd, txd, txf, drx;
+
+	sc->mon_run = false;
+	if (sc->stopping || sc->dp_debug == 0)
+		return;
+	rx = sc->rx_frames;
+	tx = sc->tx_frames;
+	rxd = sc->rx_drop;
+	txd = sc->tx_drop;
+	txf = sc->tx_full;
+	drx = rx - sc->mon_rx;
+	if (rxd != sc->mon_rxdrop || txd != sc->mon_txdrop || txf != sc->mon_txfull)
+		device_printf(sc->dev, "dp-debug: errors rx_err+%ju tx_drop+%ju tx_full+%ju\n",
+		    (uintmax_t)(rxd - sc->mon_rxdrop), (uintmax_t)(txd - sc->mon_txdrop),
+		    (uintmax_t)(txf - sc->mon_txfull));
+	if (drx == 0) {
+		sc->mon_zero_s++;
+		if (sc->mon_zero_s == 2 && sc->mon_hi_rate >= 1000 && !sc->mon_stall) {
+			sc->mon_stall = true;
+			device_printf(sc->dev, "dp-debug: stall start: no rx for 2 s after %ju pkts/s\n",
+			    (uintmax_t)sc->mon_hi_rate);
+		}
+	} else {
+		if (sc->mon_stall) {
+			sc->mon_stall = false;
+			sc->stalls++;
+			if (sc->mon_zero_s > sc->stall_max_s)
+				sc->stall_max_s = sc->mon_zero_s;
+			device_printf(sc->dev, "dp-debug: stall end after %u s\n", sc->mon_zero_s);
+		}
+		sc->mon_zero_s = 0;
+		sc->mon_hi_rate = drx;
+	}
+	sc->mon_rx = rx;
+	sc->mon_tx = tx;
+	sc->mon_rxdrop = rxd;
+	sc->mon_txdrop = txd;
+	sc->mon_txfull = txf;
+	if (++sc->mon_secs % 10 == 0) {
+		device_printf(sc->dev, "dp-debug: rate rx %ju tx %ju pkts/s (10 s avg)\n",
+		    (uintmax_t)((rx - sc->mon_rx10) / 10), (uintmax_t)((tx - sc->mon_tx10) / 10));
+		sc->mon_rx10 = rx;
+		sc->mon_tx10 = tx;
+	}
+	xo_mon_counters(sc);
+	if (!sc->stopping && sc->dp_debug != 0) {
+		sc->mon_run = true;
+		taskqueue_enqueue_timeout(sc->tq, &sc->mon, hz);
+	}
+}
+
+static int
+xo_sysctl_dp_debug(SYSCTL_HANDLER_ARGS)
+{
+	struct xo_softc *sc = arg1;
+	int v = sc->dp_debug, error;
+
+	error = sysctl_handle_int(oidp, &v, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (v < 0 || v > 1)
+		return (EINVAL);
+	if (v == 1 && sc->dp_debug == 0) {
+		sc->mon_cnt_ok = false;
+		sc->mon_stall = false;
+		sc->mon_zero_s = 0;
+		sc->mon_hi_rate = 0;
+		sc->mon_secs = 0;
+		sc->mon_rx = sc->mon_rx10 = sc->rx_frames;
+		sc->mon_tx = sc->mon_tx10 = sc->tx_frames;
+		sc->mon_rxdrop = sc->rx_drop;
+		sc->mon_txdrop = sc->tx_drop;
+		sc->mon_txfull = sc->tx_full;
+	}
+	sc->dp_debug = v;
+	if (v == 1 && !sc->mon_run && !sc->stopping) {
+		sc->mon_run = true;
+		taskqueue_enqueue_timeout(sc->tq, &sc->mon, hz);
+	}
+	return (0);
+}
+
+static void
+xo_ft_dump(struct xo_softc *sc, const char *name, const uint8_t *p, uint32_t len)
+{
+	char line[3 * 16 + 1];
+	uint32_t i, j, n;
+
+	if (sc->dp_debug == 0)
+		return;
+	for (i = 0; i < len; i += 16) {
+		n = MIN(16, len - i);
+		for (j = 0; j < n; j++)
+			snprintf(line + j * 3, 4, "%02x ", p[i + j]);
+		device_printf(sc->dev, "ft: dbg %s +%u: %s\n", name, i, line);
+	}
+}
+
+static void
+xo_ft_mflow(uint8_t *p, uint32_t id, uint32_t rev, uint32_t dir, uint32_t conn, uint32_t nhop,
+    bool clear)
+{
+	memset(p, 0, XO_FT_MFLOW_LEN);
+	le32enc(p, id | rev << XO_RX_FLOW_REV_SHIFT | 0x80000000U);
+	if (!clear) {
+		le32enc(p + 4, XO_FT_ACTION_FWD << 16 | dir << 23 | (XO_FT_BRCTL & 0xf) << 24 |
+		    XO_FT_STATE_ACTIVE << 28);
+		le32enc(p + 28, XO_FT_TIMEOUT_S);
+	}
+	le32enc(p + 12, conn);
+	le32enc(p + 16, XO_FT_CONN_REV << 16);
+	le32enc(p + 20, nhop);
+}
+
+static void
+xo_ft_nhop(uint8_t *p, uint32_t index, const uint8_t *dmac, const uint8_t *smac, uint8_t iface)
+{
+	memset(p, 0, XO_FT_NHOP_LEN);
+	le32enc(p, index);
+	p[4] = 1;
+	memcpy(p + 8, dmac, ETHER_ADDR_LEN);
+	memcpy(p + 14, smac, ETHER_ADDR_LEN);
+	be16enc(p + 20, ETHERTYPE_IP);
+	p[26] = 1;
+	p[27] = iface;
+	le16enc(p + 28, XO_LIF_MTU);
+}
+
+static int
+xo_ft_table_read(struct xo_softc *sc, uint8_t cmd, uint32_t index, const uint8_t **reply)
+{
+	uint8_t req[12] = {};
+	int err;
+
+	le32enc(req, index);
+	le16enc(req + 4, 1);
+	le16enc(req + 6, 2);
+	le32enc(req + 8, index);
+	err = xo_rpc_post(sc, cmd + sc->plat_shift, req, sizeof(req));
+	if (err != 0)
+		return (err);
+	*reply = (const uint8_t *)sc->rpc_cmd.vaddr + XO_RPC_BUF_DESC_SIZE;
+	return (0);
+}
+
+static int
+xo_ft_mflow_read(struct xo_softc *sc, uint32_t index, const uint8_t **reply)
+{
+	int err;
+
+	err = xo_ft_table_read(sc, XO_RPC_CMD_LO_MFLOW_READ, index, reply);
+	if (err != 0)
+		return (err);
+	if (sc->rpc_last_len != 116 || le32dec(*reply) != index)
+		return (EPROTO);
+	return (0);
+}
+
+static int
+xo_ft_conn_read(struct xo_softc *sc, uint32_t index, const uint8_t **entry)
+{
+	const uint8_t *reply;
+	int err;
+
+	err = xo_ft_table_read(sc, XO_RPC_CMD_LO_CONN_READ, index, &reply);
+	if (err != 0)
+		return (err);
+	if ((sc->rpc_last_len != 112 && sc->rpc_last_len != 116) || le32dec(reply) != index)
+		return (EPROTO);
+	*entry = reply + sc->rpc_last_len - 108;
+	return (0);
+}
+
+static int
+xo_ft_check_mflow(struct xo_softc *sc, const uint8_t *payload, bool verify)
+{
+	const uint8_t *reply, *op;
+	uint32_t identity = le32dec(payload);
+	uint32_t index = identity & XO_RX_FLOW_ID_MASK;
+	uint32_t rev = (identity >> XO_RX_FLOW_REV_SHIFT) & XO_RX_FLOW_REV_MASK;
+	uint32_t state;
+	int err;
+
+	err = xo_ft_mflow_read(sc, index, &reply);
+	if (err != 0)
+		return (err);
+	state = le32dec(reply + 84);
+	if (((state >> 16) & 0xff) == 0)
+		return (EAGAIN);
+	if (((state >> 8) & 0x3f) != rev) {
+		device_printf(sc->dev, "ft: mflow %u state %#010x want rev %u\n", index, state, rev);
+		return (ESTALE);
+	}
+	if (!verify)
+		return (0);
+	op = reply + 92;
+	if (((state >> 24) & 0xff) == 0 ||
+	    ((le32dec(op) ^ le32dec(payload + 4)) & 0xff8fffffU) != 0 ||
+	    ((le32dec(op + 4) ^ le32dec(payload + 8)) & 0x01ffffffU) != 0 ||
+	    le32dec(op + 8) != le32dec(payload + 12) ||
+	    le32dec(op + 12) != le32dec(payload + 16) ||
+	    le32dec(op + 16) != le32dec(payload + 20) ||
+	    le16dec(op + 20) != le16dec(payload + 24)) {
+		device_printf(sc->dev, "ft: verify mismatch mflow %u state %#010x\n", index, state);
+		xo_ft_dump(sc, "want", payload + 4, 22);
+		xo_ft_dump(sc, "have", op, 22);
+		return (EIO);
+	}
+	return (0);
+}
+
+static int
+xo_ft_check_conn(struct xo_softc *sc, const uint8_t *payload)
+{
+	const uint8_t *entry;
+	int err;
+
+	err = xo_ft_conn_read(sc, le32dec(payload), &entry);
+	if (err != 0)
+		return (err);
+	if (((le32dec(entry) ^ le32dec(payload + 4)) & 0xc078ffffU) != 0 ||
+	    le32dec(entry + 8) != le32dec(payload + 12) ||
+	    memcmp(entry + 80, payload + XO_FT_FLOW_OFF_NAT, 24) != 0) {
+		device_printf(sc->dev, "ft: verify mismatch conn %u\n", le32dec(payload));
+		xo_ft_dump(sc, "conn want", payload + 4, 16);
+		xo_ft_dump(sc, "conn have", entry, 16);
+		return (EIO);
+	}
+	return (0);
+}
+
+static int
+xo_ft_flow_write(struct xo_softc *sc, uint8_t cmd, const uint8_t *payload, uint16_t len)
+{
+	unsigned int attempt;
+	int err;
+
+	if (cmd == XO_RPC_CMD_FLOW_CREATE_FP) {
+		err = xo_ft_check_mflow(sc, payload + XO_FT_FLOW_OFF_MFLOW_O, false);
+		if (err == 0)
+			err = xo_ft_check_mflow(sc, payload + XO_FT_FLOW_OFF_MFLOW_R, false);
+		if (err != 0)
+			return (err);
+	}
+	err = xo_rpc_post(sc, cmd, payload, len);
+	if (err != 0 || cmd != XO_RPC_CMD_FLOW_CREATE_FP)
+		return (err);
+	for (attempt = 0; attempt < 3; attempt++) {
+		if (attempt != 0)
+			pause_sbt("xoft", 5 * SBT_1MS, 0, C_HARDCLOCK);
+		err = xo_ft_check_mflow(sc, payload + XO_FT_FLOW_OFF_MFLOW_O, true);
+		if (err == 0)
+			err = xo_ft_check_mflow(sc, payload + XO_FT_FLOW_OFF_MFLOW_R, true);
+		if (err == 0)
+			err = xo_ft_check_conn(sc, payload);
+		if (err != EIO)
+			break;
+	}
+	return (err);
+}
+
+static void
+xo_ft_teardown(struct xo_softc *sc)
+{
+	uint8_t req[8] = {}, m[XO_FT_MFLOW_LEN];
+	const uint8_t *entry;
+	uint32_t conn = XO_FT_CONN_BASE, flags, i;
+
+	if (xo_ft_conn_read(sc, conn, &entry) == 0) {
+		flags = le32dec(entry);
+		if ((flags >> 30) == 1 || (flags >> 30) == 2) {
+			le32enc(req, conn);
+			le16enc(req + 4, flags & 0xffff);
+			if (xo_rpc_post(sc, XO_RPC_CMD_CONN_RECLAIM_FP, req, sizeof(req)) == 0)
+				sc->ft_reclaimed++;
+		}
+	}
+	for (i = 0; i < 2; i++) {
+		xo_ft_mflow(m, sc->ft_id[i], sc->ft_rev[i], 0, conn, XO_FT_NHOP_BASE + i, true);
+		(void)xo_rpc_post(sc, XO_RPC_CMD_MFLOW_PROGRAM, m, sizeof(m));
+	}
+	sc->ft_used = false;
+}
+
+/* Copy the best reverse-direction TCP pair; orig is the side whose peer shows SNAT. */
+static bool
+xo_ft_pick(struct xo_softc *sc, struct xo_flow *orig, struct xo_flow *reply)
+{
+	uint64_t best = 0;
+	bool found = false, ambiguous = false;
+	uint32_t i, j;
+
+	mtx_lock(&sc->flow_lock);
+	for (i = 0; i < XO_FLOW_MAX; i++) {
+		const struct xo_flow *a = &sc->flow[i];
+
+		if (!a->used || !a->tuple_valid || a->proto != 6 || a->frames < XO_FT_MIN_FRAMES ||
+		    (ticks - a->last_seen) * 1000 / hz > XO_FT_MAX_AGE_MS)
+			continue;
+		for (j = 0; j < XO_FLOW_MAX; j++) {
+			const struct xo_flow *b = &sc->flow[j];
+
+			if (j == i || !b->used || !b->tuple_valid || b->proto != 6 ||
+			    b->frames < XO_FT_MIN_FRAMES ||
+			    (ticks - b->last_seen) * 1000 / hz > XO_FT_MAX_AGE_MS ||
+			    a->tag == b->tag || memcmp(b->src, a->dst, 4) != 0 ||
+			    b->sport != a->dport)
+				continue;
+			if (memcmp(b->dst, a->src, 4) == 0 && b->dport == a->sport) {
+				ambiguous = true;
+				continue;
+			}
+			if (a->frames + b->frames > best) {
+				best = a->frames + b->frames;
+				*orig = *a;
+				*reply = *b;
+				found = true;
+			}
+		}
+	}
+	mtx_unlock(&sc->flow_lock);
+	if (!found && ambiguous)
+		device_printf(sc->dev, "ft: pair has no NAT, orientation ambiguous: refused\n");
+	return (found);
+}
+
+static int
+xo_ft_add(struct xo_softc *sc)
+{
+	uint8_t nh[2][XO_FT_NHOP_LEN], fc[XO_FT_FLOW_LEN];
+	struct xo_flow a, b;
+	uint8_t *nat;
+	uint32_t flags;
+	int err, ia, ib;
+	const char *step = "none";
+	bool snat, dnat;
+
+	sx_assert(&sc->lock, SA_XLOCKED);
+	if (!sc->rpc_ready || !sc->offload_on)
+		return (ENXIO);
+	if (xo_accel_platform(sc) != 0)
+		return (ENOENT);
+	if (sc->ft_used)
+		return (EBUSY);
+	if (!xo_ft_pick(sc, &a, &b))
+		return (ENOENT);
+	ia = xo_iface_for_tag(a.tag);
+	ib = xo_iface_for_tag(b.tag);
+	if (ia < 0 || ib < 0)
+		return (ENODEV);
+
+	xo_ft_nhop(nh[0], XO_FT_NHOP_BASE, b.smac, b.dmac, ib + XO_FT_NWA_IFACE_BASE);
+	xo_ft_nhop(nh[1], XO_FT_NHOP_BASE + 1, a.smac, a.dmac, ia + XO_FT_NWA_IFACE_BASE);
+
+	memset(fc, 0, sizeof(fc));
+	le32enc(fc, XO_FT_CONN_BASE);
+	le32enc(fc + 12, XO_FT_CONN_BASE);
+	nat = fc + XO_FT_FLOW_OFF_NAT;
+	memcpy(nat, a.src, 4);
+	memcpy(nat + 4, a.dst, 4);
+	memcpy(nat + 8, b.dst, 4);
+	memcpy(nat + 12, b.src, 4);
+	be16enc(nat + 16, a.dport);
+	be16enc(nat + 18, a.sport);
+	be16enc(nat + 20, b.sport);
+	be16enc(nat + 22, b.dport);
+	snat = memcmp(b.dst, a.src, 4) != 0 || b.dport != a.sport;
+	dnat = memcmp(b.src, a.dst, 4) != 0 || b.sport != a.dport;
+	flags = XO_FT_CONN_REV | (XO_FT_VERDICT & 3) << 21 | 1U << 30 | (uint32_t)snat << 20 |
+	    (uint32_t)dnat << 19;
+	le32enc(fc + 4, flags);
+	le32enc(fc + XO_FT_FLOW_OFF_VALID, 3);
+	xo_ft_mflow(fc + XO_FT_FLOW_OFF_MFLOW_O, a.id, a.rev, 0, XO_FT_CONN_BASE, XO_FT_NHOP_BASE,
+	    false);
+	xo_ft_mflow(fc + XO_FT_FLOW_OFF_MFLOW_R, b.id, b.rev, 1, XO_FT_CONN_BASE,
+	    XO_FT_NHOP_BASE + 1, false);
+
+	sc->ft_id[0] = a.id;
+	sc->ft_rev[0] = a.rev;
+	sc->ft_id[1] = b.id;
+	sc->ft_rev[1] = b.rev;
+	step = "nhop0";
+	err = xo_rpc_post(sc, XO_RPC_CMD_NHOP_PROGRAM, nh[0], XO_FT_NHOP_LEN);
+	if (err == 0) {
+		step = "nhop1";
+		err = xo_rpc_post(sc, XO_RPC_CMD_NHOP_PROGRAM, nh[1], XO_FT_NHOP_LEN);
+	}
+	if (err == 0) {
+		step = "flow-create";
+		err = xo_ft_flow_write(sc, XO_RPC_CMD_FLOW_CREATE_FP, fc, sizeof(fc));
+	}
+	if (err != 0) {
+		sc->ft_failed++;
+		device_printf(sc->dev, "ft: program failed at %s (%d) ids %u/%u\n", step, err,
+		    a.id, b.id);
+		if (err != EAGAIN && err != ESTALE && err != EBUSY && strcmp(step, "flow-create") == 0) {
+			xo_ft_teardown(sc);
+			device_printf(sc->dev, "ft: rolled back conn %u\n", XO_FT_CONN_BASE);
+		}
+		return (err);
+	}
+	sc->ft_used = true;
+	sc->ft_programmed++;
+	xo_ft_dump(sc, "nhop-orig", nh[0], sizeof(nh[0]));
+	xo_ft_dump(sc, "nhop-reply", nh[1], sizeof(nh[1]));
+	xo_ft_dump(sc, "flow-create", fc, sizeof(fc));
+	device_printf(sc->dev,
+	    "ft: offloaded conn %u orig id %u rev %u reply id %u rev %u%s "
+	    "%u.%u.%u.%u:%u > %u.%u.%u.%u:%u nat %u.%u.%u.%u:%u > %u.%u.%u.%u:%u "
+	    "frames %ju/%ju out if %d/%d\n",
+	    XO_FT_CONN_BASE, a.id, a.rev, b.id, b.rev, snat || dnat ? " (NAT)" : "",
+	    a.src[0], a.src[1], a.src[2], a.src[3], a.sport,
+	    a.dst[0], a.dst[1], a.dst[2], a.dst[3], a.dport,
+	    b.dst[0], b.dst[1], b.dst[2], b.dst[3], b.dport,
+	    b.src[0], b.src[1], b.src[2], b.src[3], b.sport,
+	    (uintmax_t)a.frames, (uintmax_t)b.frames, ib, ia);
+	return (0);
+}
+
+static int
+xo_sysctl_ft_add(SYSCTL_HANDLER_ARGS)
+{
+	struct xo_softc *sc = arg1;
+	int error, v = 0;
+
+	error = priv_check(req->td, PRIV_DRIVER);
+	if (error != 0)
+		return (error);
+	error = sysctl_handle_int(oidp, &v, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (v != 1)
+		return (EINVAL);
+	if (xo_ft == 0)
+		return (EPERM);
+	sx_xlock(&sc->lock);
+	error = xo_ft_add(sc);
+	sx_xunlock(&sc->lock);
+	return (error);
+}
+
+static int
+xo_sysctl_ft_del(SYSCTL_HANDLER_ARGS)
+{
+	struct xo_softc *sc = arg1;
+	int error, v = 0;
+
+	error = priv_check(req->td, PRIV_DRIVER);
+	if (error != 0)
+		return (error);
+	error = sysctl_handle_int(oidp, &v, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (v != 1)
+		return (EINVAL);
+	if (xo_ft == 0)
+		return (EPERM);
+	sx_xlock(&sc->lock);
+	if (!sc->rpc_ready || !sc->plat_known || !sc->ft_used)
+		error = ENOENT;
+	else {
+		xo_ft_teardown(sc);
+		device_printf(sc->dev, "ft: released conn %u\n", XO_FT_CONN_BASE);
+	}
+	sx_xunlock(&sc->lock);
+	return (error);
+}
+
+static int
+xo_sysctl_alloc(SYSCTL_HANDLER_ARGS)
+{
+	struct xo_softc *sc = arg1;
+	struct sbuf sb;
+	int error;
+
+	error = priv_check(req->td, PRIV_DRIVER);
+	if (error != 0)
+		return (error);
+	sbuf_new_for_sysctl(&sb, NULL, 256, req);
+	sbuf_printf(&sb, "conn_used=%u conn_total=%u nhop_used=%u nhop_total=%u programmed=%u failed=%u "
+	    "reclaimed=%u rearmed=0 ft=%d offload=%d fw_cfg=%#06x fw_cfg_source=last_sent",
+	    sc->ft_used ? 1 : 0, sc->plat_known ? sc->plat_conn : 0, sc->ft_used ? 2 : 0,
+	    sc->plat_known ? sc->plat_nhop : 0, sc->ft_programmed, sc->ft_failed, sc->ft_reclaimed,
+	    xo_ft, sc->offload_on, sc->fw_cfg);
+	error = sbuf_finish(&sb);
+	sbuf_delete(&sb);
+	return (error);
+}
+
+static int
+xo_sysctl_flows(SYSCTL_HANDLER_ARGS)
+{
+	struct xo_softc *sc = arg1;
+	struct sbuf sb;
+	uint32_t i, n = 0;
+	int error;
+
+	error = priv_check(req->td, PRIV_DRIVER);
+	if (error != 0)
+		return (error);
+	sbuf_new_for_sysctl(&sb, NULL, 4096, req);
+	mtx_lock(&sc->flow_lock);
+	sbuf_printf(&sb, "meta_frames=%ju sig=%ju valid=%ju\n", (uintmax_t)sc->meta_frames,
+	    (uintmax_t)sc->meta_sig, (uintmax_t)sc->meta_valid);
+	for (i = 0; i < XO_FLOW_MAX; i++) {
+		const struct xo_flow *e = &sc->flow[i];
+
+		if (!e->used)
+			continue;
+		n++;
+		sbuf_printf(&sb, "id=%u rev=%u tag=%u ", e->id, e->rev, e->tag);
+		if (e->tuple_valid)
+			sbuf_printf(&sb, "proto=%u %u.%u.%u.%u:%u > %u.%u.%u.%u:%u vlan=%u %02x:%02x:%02x:%02x:%02x:%02x > %02x:%02x:%02x:%02x:%02x:%02x ",
+			    e->proto, e->src[0], e->src[1], e->src[2], e->src[3], e->sport,
+			    e->dst[0], e->dst[1], e->dst[2], e->dst[3], e->dport, e->vlan,
+			    e->smac[0], e->smac[1], e->smac[2], e->smac[3], e->smac[4], e->smac[5],
+			    e->dmac[0], e->dmac[1], e->dmac[2], e->dmac[3], e->dmac[4], e->dmac[5]);
+		else
+			sbuf_printf(&sb, "no-tuple ");
+		sbuf_printf(&sb, "frames=%ju age_ms=%d\n", (uintmax_t)e->frames,
+		    (int)((ticks - e->last_seen) * 1000 / hz));
+	}
+	mtx_unlock(&sc->flow_lock);
+	sbuf_printf(&sb, "entries=%u of %u\n", n, XO_FLOW_MAX);
 	error = sbuf_finish(&sb);
 	sbuf_delete(&sb);
 	return (error);
@@ -1942,6 +2861,7 @@ xo_attach(device_t dev)
 	sc->want_ifaces = xo_ifaces != 0;
 	sc->want_tx = xo_tx != 0;
 	mtx_init(&sc->tx_lock, "xgs_octep_tx", NULL, MTX_DEF);
+	mtx_init(&sc->flow_lock, "xgs_octep_flow", NULL, MTX_DEF);
 	sc->tq = taskqueue_create("xgs_octep", M_WAITOK, taskqueue_thread_enqueue, &sc->tq);
 	taskqueue_start_threads(&sc->tq, 1, PWAIT, "xgs_octep taskq");
 	sc->rxtq = taskqueue_create("xgs_octep_rx", M_WAITOK, taskqueue_thread_enqueue, &sc->rxtq);
@@ -1960,11 +2880,42 @@ xo_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "links",
 	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0, xo_sysctl_links, "A",
 	    "per-port link word and switch MIB counters");
+	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "accel",
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0, xo_sysctl_accel, "A",
+	    "read-only NPU fast-path platform and counters");
+	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "flows",
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0, xo_sysctl_flows, "A",
+	    "read-only NPU flow ids seen on RX, paired with the packet tuple");
 	SYSCTL_ADD_U32(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "ports", CTLFLAG_RD,
 	    &sc->nwa_nports, 0, "ports reported by the network agent");
 
+	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "alloc",
+	    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0, xo_sysctl_alloc, "A",
+	    "flow allocation counts and the offload gate as last sent");
+	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "ft_add",
+	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0, xo_sysctl_ft_add, "I",
+	    "write 1 to program the best live TCP pair as one NPU flow (needs hw.xgs_octep.ft=1)");
+	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "ft_del",
+	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0, xo_sysctl_ft_del, "I",
+	    "write 1 to reclaim the programmed NPU flow");
+	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "dp_debug",
+	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0, xo_sysctl_dp_debug, "I",
+	    "1 logs drops, stalls, packet rates and moved NPU counters (default 0)");
+
 	TIMEOUT_TASK_INIT(sc->tq, &sc->poll, 0, xo_poll_task, sc);
+	TIMEOUT_TASK_INIT(sc->tq, &sc->mon, 0, xo_mon_task, sc);
+	if (xo_dp_debug != 0) {
+		sc->dp_debug = 1;
+		sc->mon_run = true;
+		taskqueue_enqueue_timeout(sc->tq, &sc->mon, hz);
+	}
 	if (sc->want_ifaces && cold) {
 		sc->hook.ich_func = xo_hold_noop;
 		sc->hook.ich_arg = sc;
@@ -1986,6 +2937,8 @@ xo_detach(device_t dev)
 	sc->stopping = true;
 	while (taskqueue_cancel_timeout(sc->tq, &sc->poll, NULL) != 0)
 		taskqueue_drain_timeout(sc->tq, &sc->poll);
+	while (taskqueue_cancel_timeout(sc->tq, &sc->mon, NULL) != 0)
+		taskqueue_drain_timeout(sc->tq, &sc->mon);
 	taskqueue_free(sc->tq);
 	while (taskqueue_cancel_timeout(sc->rxtq, &sc->rxpoll, NULL) != 0)
 		taskqueue_drain_timeout(sc->rxtq, &sc->rxpoll);
@@ -1993,6 +2946,7 @@ xo_detach(device_t dev)
 	xo_hold_release(sc);
 	sx_destroy(&sc->lock);
 	mtx_destroy(&sc->tx_lock);
+	mtx_destroy(&sc->flow_lock);
 	xo_release(sc);
 	return (0);
 }

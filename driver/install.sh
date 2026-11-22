@@ -21,11 +21,25 @@ fi
 /usr/sbin/pciconf -l | grep -qE 'chip=0xa300177d|vendor=0x177d[[:space:]]+device=0xa300' ||
 	{ echo "no OCTEON TX (177d:a300) found; this is for the XGS 2300" >&2; exit 1; }
 echo "kernel : $(uname -v)"
+RUNVER=$(/sbin/sysctl -n kern.osreldate)
 install -d /boot/modules
 if [ -f "${PRE}" ]; then
 	echo "module : prebuilt ${PRE}"
+	PIN=$(cat "${PRE}.sha256" 2>/dev/null) || { echo "missing ${PRE}.sha256; refusing to install" >&2; exit 1; }
+	GOT=$(/sbin/sha256 -q "${PRE}")
+	[ -n "${PIN}" ] && [ "${GOT}" = "${PIN}" ] ||
+		{ echo "hash mismatch: module ${GOT}, pinned ${PIN}; refusing to install" >&2; exit 1; }
+	echo "pin ok : ${GOT}"
+	BUILT=$(cat "${PRE}.kver" 2>/dev/null) || { echo "missing ${PRE}.kver; refusing to install" >&2; exit 1; }
+	[ "${BUILT}" = "${RUNVER}" ] ||
+		{ echo "kernel mismatch: module built for ${BUILT}, running ${RUNVER}; refusing to install" >&2; exit 1; }
+	echo "kernel ok : ${RUNVER}"
 	install -m 0555 "${PRE}" /boot/modules/xgs_octep.ko
 else
+	SRCVER=$(awk '$1 == "#define" && $2 == "__FreeBSD_version" {print $3; exit}' "${SYSDIR}/sys/param.h")
+	[ "${SRCVER}" = "${RUNVER}" ] ||
+		{ echo "kernel mismatch: sources ${SRCVER:-unknown}, running ${RUNVER}; refusing to build" >&2; exit 1; }
+	echo "kernel ok : ${RUNVER}"
 	command -v make >/dev/null && command -v cc >/dev/null ||
 		{ echo "make and cc are needed to build; put a built xgs_octep.ko in ${HERE}/prebuilt/" >&2; exit 1; }
 	echo "sources: ${SYSDIR}"
@@ -36,8 +50,11 @@ else
 	install -m 0555 "${WORK}/xgs_octep.ko" /boot/modules/xgs_octep.ko
 fi
 
-/sbin/kldstat -q -n xgs_octep && /sbin/kldunload xgs_octep
-/sbin/kldload xgs_octep
+if /sbin/kldstat -q -n xgs_octep && ! /sbin/kldunload xgs_octep; then
+	echo "module stays loaded (in use); the new file takes effect after a reboot"
+else
+	/sbin/kldload xgs_octep
+fi
 
 if [ "${BOOT}" -eq 1 ]; then
 	LC=/boot/loader.conf.local

@@ -294,7 +294,7 @@ defaults to 1). Check it:
     /sbin/sysctl dev.xgs_octep.0.status
 
 `offload=1 fw_cfg=0x3` means the gate is on. `/bin/sh driver/offload-check.sh`
-prints `OFFLOAD: ENABLED` or `NOT ENABLED`; with `start` and `stop` around a
+prints `OFFLOAD GATE: ON` or `OFF`; with `start` and `stop` around a
 transfer it shows whether frames were hardware-forwarded. Flow offload itself is
 not validated yet (Task 6), so today all traffic still takes the host path. To
 opt out, set `hw.xgs_octep.offload="0"` in `/boot/loader.conf.local` (or
@@ -336,7 +336,7 @@ Automation this way is untested.
 | `rc.d/xgs_octep` | boot hook |
 | `boot_loader/loader.conf.local` | loader settings used on the test box |
 | `startup_scripts/startup.sh` | optional per-interface option script (not tested) |
-| `www/xgs_octep_status.php` | status page (not working yet) |
+| `npu-status-testing/xgs_octep_status.php` | status and testing page (offload banner, health, flow indicators, test and iperf buttons) |
 | `vulnerabilities/`, `issues/vulnerabilities.md` | review findings and planned checks |
 
 ## Pre-Upload Test Record
