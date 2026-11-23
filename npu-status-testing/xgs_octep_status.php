@@ -62,11 +62,15 @@ function xgs_pcap_pids() {
 	$pids = array();
 	foreach (array("octep0", "octep1") as $i) {
 		$pid = (int)@file_get_contents("/var/run/xgs-pcap-" . $i . ".pid");
-		if ($pid > 0 && xgs_run("/bin/ps -p " . $pid . " -o comm=") === "tcpdump") {
+		if ($pid > 0 && in_array(xgs_run("/bin/ps -p " . $pid . " -o comm="), array("tcpdump", "timeout"), true)) {
 			$pids[$i] = $pid;
 		}
 	}
 	return $pids;
+}
+
+function xgs_pcap_limit($v) {
+	return max(5, min(600, (int)$v > 0 ? (int)$v : 120));
 }
 
 function xgs_pcap_start($nm, $secs = 120) {
@@ -77,7 +81,7 @@ function xgs_pcap_start($nm, $secs = 120) {
 	@mkdir(XGS_LOGDIR, 0755, true);
 	foreach (array("octep0", "octep1") as $i) {
 		@unlink("/var/run/xgs-pcap-" . $i . ".pid");
-		xgs_run("/usr/sbin/daemon -f -p /var/run/xgs-pcap-" . $i . ".pid -o " . XGS_LOGDIR . "/pcap-" . $i . ".log /usr/sbin/tcpdump -n -p --immediate-mode -U -s 96 -c 1000000 -G " . (int)$secs . " -W 1 -i " . $i . " -w " . escapeshellarg(XGS_PCAPDIR . "/" . $nm . "-" . $i . ".pcap") . " tcp port 5201");
+		xgs_run("/usr/sbin/daemon -f -p /var/run/xgs-pcap-" . $i . ".pid -o " . XGS_LOGDIR . "/pcap-" . $i . ".log /usr/bin/timeout -k 5 -s INT " . xgs_pcap_limit($secs) . " /usr/sbin/tcpdump -n -p --immediate-mode -U -s 96 -c 1000000 -i " . $i . " -w " . escapeshellarg(XGS_PCAPDIR . "/" . $nm . "-" . $i . ".pcap") . " tcp port 5201");
 	}
 	usleep(500000);
 	$GLOBALS["xgs_pcap_fail"] = "";
@@ -161,12 +165,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 			$action = "";
 		}
 	}
+	$pcaplimit = xgs_pcap_limit($_POST["pcaplimit"] ?? 120);
 	$autopcap = "";
 	if ($pcapname !== "" && $action !== "") {
 		if (in_array($action, array("cutin", "live_on", "iperf_client", "iperf_server"), true)) {
-			$cap = $action === "iperf_client" ? max(10, min(310, (int)($_POST["iperf_secs"] ?? 30) + 10)) : 120;
-			if (xgs_pcap_start($pcapname, $cap)) {
-				$autopcap = " " . sprintf(gettext("pcap armed: %s/%s-octepN.pcap."), XGS_PCAPDIR, $pcapname) . $xgs_pcap_fail;
+			if (xgs_pcap_start($pcapname, $pcaplimit)) {
+				$autopcap = " " . sprintf(gettext("pcap armed: %s/%s-octepN.pcap (stops after %d s)."), XGS_PCAPDIR, $pcapname, $pcaplimit) . $xgs_pcap_fail;
 			}
 		} elseif (in_array($action, array("iperf_stop", "live_off"), true)) {
 			if (xgs_pcap_stop() > 0) {
@@ -184,8 +188,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 		}
 	} elseif ($action === "pcap_start") {
 		$nm = $pcapname !== "" ? $pcapname : date("Ymd-His");
-		if (xgs_pcap_start($nm)) {
-			$msg = sprintf(gettext("pcap started: %s/%s-octep0.pcap and -octep1.pcap (tcp port 5201, 96 B snaplen)."), XGS_PCAPDIR, $nm) . $xgs_pcap_fail;
+		if (xgs_pcap_start($nm, $pcaplimit)) {
+			$msg = sprintf(gettext("pcap started: %s/%s-octep0.pcap and -octep1.pcap (tcp port 5201, 96 B snaplen, stops after %d s)."), XGS_PCAPDIR, $nm, $pcaplimit) . $xgs_pcap_fail;
 		} else {
 			$msg = gettext("A pcap is already running. Stop it first.");
 			$msgclass = "danger";
@@ -381,6 +385,8 @@ include("head.inc");
 		<div class="form-group">
 			<label><?=gettext("pcap file name (saved in /home/pcaps/, cut-in only; blank = auto)")?></label>
 			<input class="form-control" type="text" id="pcapname" name="pcapname" placeholder="cutin1" maxlength="64" value="<?=htmlspecialchars($_POST["pcapname"] ?? "")?>">
+			<label><?=gettext("pcap time limit (seconds, 5 to 600; every capture stops by itself at this limit)")?></label>
+			<input class="form-control" type="number" id="pcaplimit" name="pcaplimit" min="5" max="600" step="1" style="max-width:10em" value="<?=xgs_pcap_limit($_POST["pcaplimit"] ?? 120)?>">
 			<p>
 				<button class="btn btn-primary btn-sm" name="action" value="pcap_start"><?=gettext("Start pcap")?></button>
 				<button class="btn btn-danger btn-sm" name="action" value="pcap_stop"><?=gettext("Stop pcap")?></button>
@@ -478,7 +484,7 @@ include("head.inc");
 	} catch (e) {}
 	pcapNote();
 	try {
-		["iperf_from", "iperf_bind", "iperf_srv", "iperf_secs"].forEach(function (n) {
+		["iperf_from", "iperf_bind", "iperf_srv", "iperf_secs", "pcaplimit"].forEach(function (n) {
 			var e = document.getElementsByName(n)[0], k = "xgs_" + n;
 			if (!e) { return; }
 			var v = localStorage.getItem(k);
