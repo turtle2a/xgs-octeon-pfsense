@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (c) 2026 turtle2a <354865938+turtle2a@users.noreply.github.com>
 xgs_octep_load="YES"
 hw.xgs_octep.autostart="1"
 hw.xgs_octep.ifaces="1"

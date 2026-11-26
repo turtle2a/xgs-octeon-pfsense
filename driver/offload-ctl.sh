@@ -1,5 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (c) 2026 turtle2a <354865938+turtle2a@users.noreply.github.com>
 # Switch the NPU firmware offload gate at run time and show proof it switched.
 #   offload-ctl.sh on | off | status
 # Run as root. A runtime switch is not the same as offload on at boot.

@@ -1,5 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (c) 2026 turtle2a <354865938+turtle2a@users.noreply.github.com>
 # Guided offload tests; you run iperf3 from the client when asked.
 #   offload-test.sh boot [secs]     gate on from boot (default 40 s window)
 #   offload-test.sh sysctl [secs]   gate switched off then on at run time

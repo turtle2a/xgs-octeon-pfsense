@@ -1,5 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (c) 2026 turtle2a <354865938+turtle2a@users.noreply.github.com>
 # Read-only check of NPU flow offload, and a before/after counter comparison.
 #   offload-check.sh            check the gate (run before every test)
 #   offload-check.sh start      save a counter snapshot

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (c) 2026 turtle2a <354865938+turtle2a@users.noreply.github.com>
 # Portions derived from os-xgs-npu (https://github.com/AbdelmonemAwad/os-xgs-npu), Copyright (c) 2026 Abdelmonem Awad, BSD-2-Clause
 # Fetch the pfSense kernel sources (pfsense/FreeBSD-src on GitHub) that match the running kernel,
 # writing only sys/. Prints the SYSDIR to use with install.sh.
