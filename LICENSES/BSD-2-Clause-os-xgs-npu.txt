@@ -1,4 +1,4 @@
-Portions of this project are derived from os-xgs-npu
+Portions of driver/xgs_octep.c and fetch-sources.sh are derived from os-xgs-npu
 (https://github.com/AbdelmonemAwad/os-xgs-npu) and carry this notice.
 
 BSD 2-Clause License
