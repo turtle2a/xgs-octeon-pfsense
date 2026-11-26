@@ -388,10 +388,9 @@ the SPDX identifier `GPL-2.0-or-later`.
 
 ## Third-party code
 
-The following files carry portions derived from
-[os-xgs-npu](https://github.com/AbdelmonemAwad/os-xgs-npu), which is
-BSD-2-Clause licensed. The notice is at the top of each file and the licence
-text is in [LICENSES/BSD-2-Clause-os-xgs-npu.txt](LICENSES/BSD-2-Clause-os-xgs-npu.txt):
-
-- `driver/xgs_octep.c`
-- `fetch-sources.sh`
+Portions of `driver/xgs_octep.c` (the receive-ring credit logic, the network
+agent window names, the RPC descriptor offset and the bring-up messages) and
+`fetch-sources.sh` are derived from
+[os-xgs-npu](https://github.com/AbdelmonemAwad/os-xgs-npu),
+Copyright (c) 2026 Abdelmonem Awad, BSD-2-Clause. The licence text is in
+[LICENSES/BSD-2-Clause-os-xgs-npu.txt](LICENSES/BSD-2-Clause-os-xgs-npu.txt).
