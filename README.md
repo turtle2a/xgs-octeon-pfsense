@@ -385,3 +385,11 @@ install is tested on the XGS 2300 with pfSense CE 2.9.2 only.
 This project is licensed under the GNU General Public License, version 2 or
 (at your option) any later version. See [LICENSE](LICENSE). Source files use
 the SPDX identifier `GPL-2.0-or-later`.
+
+The following files carry portions derived from
+[os-xgs-npu](https://github.com/AbdelmonemAwad/os-xgs-npu), which is
+BSD-2-Clause licensed. The notice is at the top of each file and the licence
+text is in [LICENSES/BSD-2-Clause-os-xgs-npu.txt](LICENSES/BSD-2-Clause-os-xgs-npu.txt):
+
+- `driver/xgs_octep.c`
+- `fetch-sources.sh`
