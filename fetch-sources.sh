@@ -1,7 +1,5 @@
 #!/bin/sh
-# Portions derived from os-xgs-npu (https://github.com/AbdelmonemAwad/os-xgs-npu)
-# Copyright (c) 2026 Abdelmonem Awad <eg2@live.com>, BSD-2-Clause
-# Licence text: LICENSES/BSD-2-Clause-os-xgs-npu.txt
+# Portions derived from os-xgs-npu (https://github.com/AbdelmonemAwad/os-xgs-npu), Copyright (c) 2026 Abdelmonem Awad, BSD-2-Clause
 # Fetch the pfSense kernel sources (pfsense/FreeBSD-src on GitHub) that match the running kernel,
 # writing only sys/. Prints the SYSDIR to use with install.sh.
 #
