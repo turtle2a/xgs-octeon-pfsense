@@ -1,4 +1,9 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* SPDX-License-Identifier: GPL-2.0-or-later AND BSD-2-Clause */
+/*
+ * Portions derived from os-xgs-npu (https://github.com/AbdelmonemAwad/os-xgs-npu)
+ * Copyright (c) 2026 Abdelmonem Awad <eg2@live.com>, BSD-2-Clause
+ * Licence text: LICENSES/BSD-2-Clause-os-xgs-npu.txt
+ */
 /* xgs_octep: FreeBSD driver for the OCTEON TX PCIe endpoint on the XGS 2300. */
 
 #include <sys/param.h>
